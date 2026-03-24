@@ -44,15 +44,25 @@ springdoc:
   api-docs:
     path: /v3/api-docs
   swagger-ui:
-    path: /doc.html
+    path: /swagger-ui.html
     tags-sorter: alpha
     operations-sorter: alpha
+
+knife4j:
+  setting:
+    language: zh-CN
+    enable-swagger-models: true
+    swagger-model-name: 实体类列表
+    enable-document-manage: true
 
 management:
   endpoints:
     web:
       exposure:
         include: health,info
+  health:
+    rabbit:
+      enabled: false
 
 logging:
   level:

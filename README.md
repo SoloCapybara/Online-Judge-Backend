@@ -22,6 +22,8 @@
 - 健康检查接口 `/api/health`
 - Swagger 文档入口 `/api/doc.html`
 - 数据库设计文档 [docs/database-design.md](docs/database-design.md)
+- Redis 设计文档 [docs/redis-design.md](docs/redis-design.md)
+- MySQL 建表脚本 [sql/online_judge_schema.sql](sql/online_judge_schema.sql)
 
 ## 推荐目录结构
 
@@ -65,7 +67,12 @@ src/main/java/com/dxd/oj
 启动后可访问：
 
 - 健康检查：`http://localhost:8101/api/health`
-- 接口文档：`http://localhost:8101/api/doc.html`
+- Knife4j 文档：`http://localhost:8101/api/doc.html`
+- 自定义文档页：`http://localhost:8101/api/apidoc.html`
+- Swagger UI：`http://localhost:8101/api/swagger-ui.html`
+- OpenAPI JSON：`http://localhost:8101/api/v3/api-docs`
+
+前端或 AI 工具如果要根据接口文档生成页面或请求代码，优先使用 `OpenAPI JSON` 地址。
 
 ## 下一步建议
 
