@@ -1,0 +1,60 @@
+server:
+  port: 8101
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: online-judge-backend
+  profiles:
+    active: dev
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${OJ_DB_URL:jdbc:mysql://127.0.0.1:3306/online_judge?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai}
+    username: ${OJ_DB_USERNAME:root}
+    password: ${OJ_DB_PASSWORD:123456}
+  data:
+    redis:
+      host: ${OJ_REDIS_HOST:127.0.0.1}
+      port: ${OJ_REDIS_PORT:6379}
+      database: ${OJ_REDIS_DATABASE:0}
+      timeout: ${OJ_REDIS_TIMEOUT:3000ms}
+  rabbitmq:
+    host: ${OJ_RABBITMQ_HOST:127.0.0.1}
+    port: ${OJ_RABBITMQ_PORT:5672}
+    username: ${OJ_RABBITMQ_USERNAME:guest}
+    password: ${OJ_RABBITMQ_PASSWORD:guest}
+    virtual-host: ${OJ_RABBITMQ_VHOST:/}
+  jackson:
+    default-property-inclusion: non_null
+    time-zone: Asia/Shanghai
+    date-format: yyyy-MM-dd HH:mm:ss
+
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  type-aliases-package: com.dxd.oj.model.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: assign_id
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /doc.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.dxd.oj: info
+    org.springframework.security: warn
