@@ -53,6 +53,10 @@ src/main/java/com/dxd/oj
    - `OJ_REDIS_PORT`
    - `OJ_RABBITMQ_HOST`
    - `OJ_RABBITMQ_PORT`
+   - `OJ_SUPER_ADMIN_USERNAME`
+   - `OJ_SUPER_ADMIN_PASSWORD`
+   - `OJ_SUPER_ADMIN_REAL_NAME`
+   - `OJ_SUPER_ADMIN_FORCE_RESET_PASSWORD`
 3. 本地准备：
    - `MySQL`
    - `Redis`
@@ -66,11 +70,16 @@ src/main/java/com/dxd/oj
 
 启动后可访问：
 
-- 健康检查：`http://localhost:8101/api/health`
-- Knife4j 文档：`http://localhost:8101/api/doc.html`
-- 自定义文档页：`http://localhost:8101/api/apidoc.html`
-- Swagger UI：`http://localhost:8101/api/swagger-ui.html`
-- OpenAPI JSON：`http://localhost:8101/api/v3/api-docs`
+- 健康检查：`http://localhost:8080/api/health`
+- Knife4j 文档：`http://localhost:8080/api/doc.html`
+- 自定义文档页：`http://localhost:8080/api/apidoc.html`
+- Swagger UI：`http://localhost:8080/api/swagger-ui.html`
+- OpenAPI JSON：`http://localhost:8080/api/v3/api-docs`
+
+## 内置超管初始化
+
+系统启动时会幂等检查并确保存在一个超管账号（默认用户名 `admin`）并绑定 `ADMIN` 角色，不会重复插入。
+默认密码建议通过环境变量覆盖，生产环境不要使用默认值。
 
 前端或 AI 工具如果要根据接口文档生成页面或请求代码，优先使用 `OpenAPI JSON` 地址。
 

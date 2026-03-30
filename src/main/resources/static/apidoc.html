@@ -82,10 +82,7 @@
             return;
         }
 
-        let activeSearchShell = null;
-        let activeSearchPlaceholder = null;
-        let activeSearchParent = null;
-        let activeSearchNextSibling = null;
+        let activeSearchSession = null;
         let deactivateTimer = null;
 
         const style = doc.createElement("style");
@@ -334,7 +331,7 @@
                 position: relative !important;
                 display: inline-flex !important;
                 align-items: center !important;
-                vertical-align: top !important;
+                vertical-align: middle !important;
                 width: 244px !important;
                 flex: 0 0 244px !important;
                 min-width: 244px !important;
@@ -395,16 +392,20 @@
                 margin-left: 8px !important;
             }
 
-            .oj-header-search-placeholder {
-                display: inline-block !important;
-                vertical-align: top !important;
-                width: 244px !important;
-                min-width: 244px !important;
-                flex: 0 0 244px !important;
-                height: 42px !important;
-                margin-left: 8px !important;
-                pointer-events: none !important;
+            .headerSearch,
+            .headerSearch[data-v-42139358],
+            .headerSearch .input,
+            .headerSearch .input[data-v-42139358],
+            .right .action,
+            .right .action[data-v-fc02d0ca] {
+                display: inline-flex !important;
+                align-items: center !important;
+                vertical-align: middle !important;
+            }
+
+            .oj-header-search-shell--source-hidden {
                 opacity: 0 !important;
+                pointer-events: none !important;
             }
 
             .oj-header-search-shell .ant-select-selection,
@@ -560,7 +561,7 @@
                 -webkit-backdrop-filter: blur(8px) saturate(125%) !important;
             }
 
-            .oj-header-search-shell--floating {
+            .oj-floating-search {
                 position: fixed !important;
                 left: var(--oj-search-start-left) !important;
                 top: var(--oj-search-start-top) !important;
@@ -570,9 +571,10 @@
                 flex: none !important;
                 margin-left: 0 !important;
                 z-index: 9999 !important;
+                pointer-events: none !important;
             }
 
-            .oj-header-search-shell--floating.oj-header-search-shell--active {
+            .oj-floating-search.oj-floating-search--active {
                 left: 50% !important;
                 top: 10px !important;
                 width: min(560px, calc(100vw - 96px)) !important;
@@ -586,10 +588,28 @@
                     inset -1px 0 0 rgba(122, 184, 255, 0.16),
                     0 18px 44px rgba(6, 16, 30, 0.24),
                     0 0 0 1px rgba(157, 214, 255, 0.10) !important;
+                pointer-events: auto !important;
             }
 
-            .oj-header-search-shell--floating.oj-header-search-shell--active .ant-select-search__field,
-            .oj-header-search-shell--floating.oj-header-search-shell--active input.ant-select-search__field {
+            .oj-floating-search__input {
+                width: 100% !important;
+                height: 100% !important;
+                padding: 0 16px 0 42px !important;
+                background: transparent !important;
+                border: 0 !important;
+                outline: none !important;
+                box-shadow: none !important;
+                color: #f2f7ff !important;
+                font-size: 14px !important;
+                line-height: 1.5 !important;
+                caret-color: #8fdcff !important;
+            }
+
+            .oj-floating-search__input::placeholder {
+                color: rgba(242, 247, 255, 0.68) !important;
+            }
+
+            .oj-floating-search.oj-floating-search--active .oj-floating-search__input {
                 height: 44px !important;
                 line-height: 44px !important;
             }
@@ -1097,8 +1117,26 @@
                 display: none !important;
             }
 
+            .oj-menu-collapse-cooling .ant-menu-inline-collapsed,
+            .oj-menu-collapse-cooling .ant-layout-sider,
+            .oj-menu-collapse-cooling .ant-pro-sider {
+                pointer-events: none !important;
+            }
+
+            .oj-menu-collapse-cooling .ant-menu-submenu-popup,
+            .oj-menu-collapse-cooling .ant-dropdown-menu,
+            .oj-menu-collapse-cooling .ant-dropdown,
+            .oj-menu-collapse-cooling .ant-tooltip {
+                display: none !important;
+                opacity: 0 !important;
+                visibility: hidden !important;
+                pointer-events: none !important;
+            }
+
             .ant-menu-dark.ant-menu-inline > .ant-menu-item-selected,
-            .ant-menu-dark.ant-menu-inline > .ant-menu-submenu-selected > .ant-menu-submenu-title {
+            .ant-menu-dark.ant-menu-inline > .ant-menu-submenu-selected > .ant-menu-submenu-title,
+            .ant-menu-dark.ant-menu-inline-collapsed > .ant-menu-submenu-selected > .ant-menu-submenu-title,
+            .ant-menu-dark .ant-menu-submenu-selected > .ant-menu-submenu-title {
                 color: #f7fbff !important;
                 background: linear-gradient(135deg, rgba(34, 132, 255, 0.30), rgba(54, 198, 255, 0.18)) !important;
                 box-shadow:
@@ -1108,7 +1146,9 @@
             }
 
             .ant-menu-dark.ant-menu-inline > .ant-menu-item-selected::before,
-            .ant-menu-dark.ant-menu-inline > .ant-menu-submenu-selected > .ant-menu-submenu-title::before {
+            .ant-menu-dark.ant-menu-inline > .ant-menu-submenu-selected > .ant-menu-submenu-title::before,
+            .ant-menu-dark.ant-menu-inline-collapsed > .ant-menu-submenu-selected > .ant-menu-submenu-title::before,
+            .ant-menu-dark .ant-menu-submenu-selected > .ant-menu-submenu-title::before {
                 background: linear-gradient(180deg, #67d0ff, #2f88ff) !important;
                 opacity: 1 !important;
                 transform: scaleY(1) !important;
@@ -1416,6 +1456,76 @@
             });
         };
 
+        const bindMenuCollapseCooldown = () => {
+            if (doc.body.dataset.ojMenuCooldownBound === "1") {
+                return;
+            }
+
+            let cooldownTimer = null;
+            let releaseIfOutside = null;
+
+            const isInsideCurrentSiderRect = (event) => {
+                const {clientX, clientY} = event;
+                const siders = Array.from(doc.querySelectorAll(".ant-layout-sider, .ant-pro-sider"));
+                return siders.some((sider) => {
+                    const rect = sider.getBoundingClientRect();
+                    return clientX >= rect.left
+                        && clientX <= rect.right
+                        && clientY >= rect.top
+                        && clientY <= rect.bottom;
+                });
+            };
+
+            const clearCooldown = () => {
+                doc.body.classList.remove("oj-menu-collapse-cooling");
+                if (cooldownTimer) {
+                    window.clearTimeout(cooldownTimer);
+                    cooldownTimer = null;
+                }
+                if (releaseIfOutside) {
+                    doc.removeEventListener("mousemove", releaseIfOutside, true);
+                    doc.removeEventListener("click", releaseIfOutside, true);
+                    releaseIfOutside = null;
+                }
+            };
+
+            const startCooldown = () => {
+                clearCooldown();
+                doc.body.classList.add("oj-menu-collapse-cooling");
+
+                doc.querySelectorAll(".ant-menu-submenu-popup, .ant-dropdown, .ant-tooltip").forEach((popup) => {
+                    popup.style.setProperty("display", "none", "important");
+                });
+
+                releaseIfOutside = (event) => {
+                    if (!isInsideCurrentSiderRect(event)) {
+                        clearCooldown();
+                    }
+                };
+
+                doc.addEventListener("mousemove", releaseIfOutside, true);
+                doc.addEventListener("click", releaseIfOutside, true);
+                cooldownTimer = window.setTimeout(clearCooldown, 5000);
+            };
+
+            doc.addEventListener("click", (event) => {
+                const target = event.target;
+                if (!(target instanceof Element)) {
+                    return;
+                }
+                if (target.closest(".ant-pro-global-header-trigger")
+                    || target.closest(".ant-layout-sider-trigger")
+                    || target.closest(".ant-pro-sider-collapsed-button")
+                    || target.closest(".ant-pro-top-nav-header-trigger")
+                    || target.closest("i.trigger")
+                    || target.closest("i.trigger[data-v-fc02d0ca]")) {
+                    startCooldown();
+                }
+            }, true);
+
+            doc.body.dataset.ojMenuCooldownBound = "1";
+        };
+
         const patchSearchIcon = () => {
             const scopes = [
                 ".ant-layout-header",
@@ -1477,7 +1587,7 @@
                     if (event.target !== veil) {
                         return;
                     }
-                    deactivateSearchShell(true);
+                    deactivateSearchShell();
                 });
             }
             return veil;
@@ -1490,143 +1600,269 @@
             shell.style.setProperty("margin-left", "8px", "important");
         };
 
-        const deactivateSearchShell = (restoreFocus = false) => {
-            if (!activeSearchShell) {
-                return;
+        const findLiveSourceInput = (preferredInput = null) => {
+            if (preferredInput && preferredInput.isConnected) {
+                return preferredInput;
             }
-
-            const shell = activeSearchShell;
-            const placeholder = activeSearchPlaceholder;
-            const veil = ensureSearchVeil();
-            const shellInput = shell.querySelector("input.ant-select-search__field");
-
-            if (shellInput && shell.contains(doc.activeElement)) {
-                shellInput.blur();
+            const scopeSelectors = [
+                ".ant-layout-header",
+                ".ant-pro-fixed-header",
+                ".ant-pro-global-header",
+                ".ant-pro-top-nav-header"
+            ];
+            for (const scopeSelector of scopeSelectors) {
+                const input = doc.querySelector(`${scopeSelector} .headerSearch input.ant-select-search__field`)
+                    || doc.querySelector(`${scopeSelector} input.ant-select-search__field`);
+                if (input) {
+                    return input;
+                }
             }
-
-            clearTimeout(deactivateTimer);
-            shell.classList.remove("oj-header-search-shell--active");
-            veil.classList.remove("oj-search-veil--active");
-
-            const done = () => {
-                shell.classList.remove("oj-header-search-shell--floating");
-                shell.style.removeProperty("--oj-search-start-left");
-                shell.style.removeProperty("--oj-search-start-top");
-                shell.style.removeProperty("--oj-search-start-width");
-                shell.style.removeProperty("--oj-search-start-height");
-                syncSearchShellSize(shell);
-                if (activeSearchParent) {
-                    activeSearchParent.insertBefore(shell, placeholder || activeSearchNextSibling);
-                }
-                if (placeholder && placeholder.parentNode) {
-                    placeholder.parentNode.removeChild(placeholder);
-                }
-                activeSearchShell = null;
-                activeSearchPlaceholder = null;
-                activeSearchParent = null;
-                activeSearchNextSibling = null;
-            };
-
-            deactivateTimer = window.setTimeout(done, 430);
+            return preferredInput;
         };
 
-        const activateSearchShell = (input) => {
-            const shell = input.closest(".oj-header-search-shell");
-            if (!shell) {
+        const setInputValue = (input, value) => {
+            if (!input) {
                 return;
             }
+            const win = doc.defaultView || window;
+            const prototype = win.HTMLInputElement ? win.HTMLInputElement.prototype : HTMLInputElement.prototype;
+            const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+            if (descriptor && descriptor.set) {
+                descriptor.set.call(input, value);
+            } else {
+                input.value = value;
+            }
+        };
 
-            if (activeSearchShell === shell) {
+        const syncSourceSearchValue = (sourceInput, value) => {
+            const liveSourceInput = findLiveSourceInput(sourceInput);
+            if (!liveSourceInput) {
                 return;
             }
-
-            if (activeSearchShell && activeSearchShell !== shell) {
-                deactivateSearchShell(false);
+            if (activeSearchSession) {
+                activeSearchSession.sourceInput = liveSourceInput;
+                const liveSourceShell = liveSourceInput.closest(".oj-header-search-shell");
+                if (liveSourceShell) {
+                    activeSearchSession.sourceShell = liveSourceShell;
+                    liveSourceShell.classList.add("oj-header-search-shell--source-hidden");
+                }
             }
-
-            syncSearchShellSize(shell);
-            const rect = shell.getBoundingClientRect();
-            const placeholder = doc.createElement("div");
-            placeholder.className = "oj-header-search-placeholder";
-            placeholder.style.width = `${Math.round(rect.width)}px`;
-            placeholder.style.minWidth = `${Math.round(rect.width)}px`;
-            placeholder.style.flex = `0 0 ${Math.round(rect.width)}px`;
-            placeholder.style.height = `${Math.round(rect.height)}px`;
-
-            activeSearchParent = shell.parentNode;
-            activeSearchNextSibling = shell.nextSibling;
-            shell.parentNode?.insertBefore(placeholder, shell);
-            activeSearchShell = shell;
-            activeSearchPlaceholder = placeholder;
-
-            shell.style.setProperty("--oj-search-start-left", `${Math.round(rect.left)}px`);
-            shell.style.setProperty("--oj-search-start-top", `${Math.round(rect.top)}px`);
-            shell.style.setProperty("--oj-search-start-width", `${Math.round(rect.width)}px`);
-            shell.style.setProperty("--oj-search-start-height", `${Math.round(rect.height)}px`);
-            doc.body.appendChild(shell);
-            shell.classList.add("oj-header-search-shell--floating");
-            ensureSearchVeil().classList.add("oj-search-veil--active");
-
+            setInputValue(liveSourceInput, value);
+            const win = doc.defaultView || window;
+            liveSourceInput.dispatchEvent(new win.Event("input", {bubbles: true}));
             window.requestAnimationFrame(() => {
-                shell.classList.add("oj-header-search-shell--active");
-                input.focus({preventScroll: true});
+                if (activeSearchSession?.floatingInput && doc.activeElement !== activeSearchSession.floatingInput) {
+                    activeSearchSession.floatingInput.focus({preventScroll: true});
+                    const valueLength = activeSearchSession.floatingInput.value.length;
+                    activeSearchSession.floatingInput.setSelectionRange(valueLength, valueLength);
+                }
             });
         };
 
-        const bindSearchFieldBehavior = () => {
-            doc.querySelectorAll(".oj-header-search-shell").forEach((shell) => {
-                if (shell.dataset.ojShellBound === "1") {
-                    return;
-                }
-                shell.dataset.ojShellBound = "1";
+        const dispatchSourceKeyEvent = (sourceInput, type, originalEvent) => {
+            const liveSourceInput = findLiveSourceInput(sourceInput);
+            if (!liveSourceInput) {
+                return;
+            }
+            const win = doc.defaultView || window;
+            const keyboardEvent = new win.KeyboardEvent(type, {
+                key: originalEvent.key,
+                code: originalEvent.code,
+                location: originalEvent.location,
+                repeat: originalEvent.repeat,
+                ctrlKey: originalEvent.ctrlKey,
+                shiftKey: originalEvent.shiftKey,
+                altKey: originalEvent.altKey,
+                metaKey: originalEvent.metaKey,
+                bubbles: true,
+                cancelable: true,
+                composed: true
+            });
+            liveSourceInput.dispatchEvent(keyboardEvent);
+        };
 
-                const swallowShellEvent = (event) => {
+        const commitSourceSearchValue = (sourceInput, value, originalEvent = null) => {
+            const liveSourceInput = findLiveSourceInput(sourceInput);
+            if (!liveSourceInput) {
+                return;
+            }
+            setInputValue(liveSourceInput, value);
+            const win = doc.defaultView || window;
+            liveSourceInput.dispatchEvent(new win.Event("input", {bubbles: true}));
+            liveSourceInput.dispatchEvent(new win.Event("change", {bubbles: true}));
+            try {
+                liveSourceInput.dispatchEvent(new win.Event("search", {bubbles: true}));
+            } catch (error) {
+                // Ignore browsers/environments without search event support.
+            }
+            if (originalEvent) {
+                dispatchSourceKeyEvent(liveSourceInput, "keydown", originalEvent);
+                dispatchSourceKeyEvent(liveSourceInput, "keypress", originalEvent);
+                dispatchSourceKeyEvent(liveSourceInput, "keyup", originalEvent);
+            }
+        };
+
+        const ensureFloatingSearch = () => {
+            let shell = doc.getElementById("oj-floating-search");
+            let input = shell ? shell.querySelector(".oj-floating-search__input") : null;
+            if (!shell) {
+                shell = doc.createElement("div");
+                shell.id = "oj-floating-search";
+                shell.className = "oj-header-search-shell oj-floating-search";
+
+                input = doc.createElement("input");
+                input.type = "text";
+                input.className = "oj-floating-search__input";
+                input.autocomplete = "off";
+                input.spellcheck = false;
+                shell.appendChild(input);
+
+                const stopEvent = (event) => {
                     event.stopPropagation();
                     event.stopImmediatePropagation();
                 };
 
-                shell.addEventListener("pointerdown", swallowShellEvent, true);
-                shell.addEventListener("mousedown", swallowShellEvent, true);
-                shell.addEventListener("click", swallowShellEvent, true);
-            });
+                shell.addEventListener("pointerdown", stopEvent, true);
+                shell.addEventListener("mousedown", stopEvent, true);
+                shell.addEventListener("click", stopEvent, true);
 
+                input.addEventListener("pointerdown", stopEvent, true);
+                input.addEventListener("mousedown", stopEvent, true);
+                input.addEventListener("click", stopEvent, true);
+                input.addEventListener("keydown", (event) => {
+                    event.stopPropagation();
+                    if (event.key === "Escape") {
+                        event.preventDefault();
+                        deactivateSearchShell();
+                        return;
+                    }
+                    if (event.key === "Enter") {
+                        if (activeSearchSession?.sourceInput) {
+                            commitSourceSearchValue(activeSearchSession.sourceInput, input.value, event);
+                        }
+                    }
+                }, true);
+                input.addEventListener("keypress", stopEvent, true);
+                input.addEventListener("keyup", stopEvent, true);
+                input.addEventListener("input", () => {
+                    if (!activeSearchSession?.sourceInput) {
+                        return;
+                    }
+                    syncSourceSearchValue(activeSearchSession.sourceInput, input.value);
+                });
+                input.addEventListener("compositionend", () => {
+                    if (!activeSearchSession?.sourceInput) {
+                        return;
+                    }
+                    syncSourceSearchValue(activeSearchSession.sourceInput, input.value);
+                });
+            }
+
+            if (!shell.isConnected) {
+                doc.body.appendChild(shell);
+            }
+
+            return {shell, input};
+        };
+
+        const deactivateSearchShell = () => {
+            if (!activeSearchSession) {
+                return;
+            }
+
+            const session = activeSearchSession;
+            const {sourceShell, floatingShell, floatingInput, veil} = session;
+
+            clearTimeout(deactivateTimer);
+            floatingInput.blur();
+            floatingShell.classList.remove("oj-floating-search--active");
+            veil.classList.remove("oj-search-veil--active");
+
+            deactivateTimer = window.setTimeout(() => {
+                if (floatingShell.parentNode) {
+                    floatingShell.parentNode.removeChild(floatingShell);
+                }
+                sourceShell.classList.remove("oj-header-search-shell--source-hidden");
+                floatingShell.style.removeProperty("--oj-search-start-left");
+                floatingShell.style.removeProperty("--oj-search-start-top");
+                floatingShell.style.removeProperty("--oj-search-start-width");
+                floatingShell.style.removeProperty("--oj-search-start-height");
+                activeSearchSession = null;
+            }, 430);
+        };
+
+        const activateSearchShell = (sourceInput) => {
+            const liveSourceInput = findLiveSourceInput(sourceInput);
+            const sourceShell = liveSourceInput?.closest(".oj-header-search-shell");
+            if (!sourceShell) {
+                return;
+            }
+
+            if (activeSearchSession) {
+                activeSearchSession.sourceInput = liveSourceInput || activeSearchSession.sourceInput;
+                activeSearchSession.sourceShell = sourceShell || activeSearchSession.sourceShell;
+                if (activeSearchSession.sourceShell) {
+                    activeSearchSession.sourceShell.classList.add("oj-header-search-shell--source-hidden");
+                }
+                window.requestAnimationFrame(() => {
+                    if (activeSearchSession?.floatingInput) {
+                        activeSearchSession.floatingInput.focus({preventScroll: true});
+                    }
+                });
+                return;
+            }
+
+            syncSearchShellSize(sourceShell);
+            const rect = sourceShell.getBoundingClientRect();
+            const veil = ensureSearchVeil();
+            const {shell: floatingShell, input: floatingInput} = ensureFloatingSearch();
+
+            clearTimeout(deactivateTimer);
+            floatingShell.classList.remove("oj-floating-search--active");
+            floatingShell.style.setProperty("--oj-search-start-left", `${Math.round(rect.left)}px`);
+            floatingShell.style.setProperty("--oj-search-start-top", `${Math.round(rect.top)}px`);
+            floatingShell.style.setProperty("--oj-search-start-width", `${Math.round(rect.width)}px`);
+            floatingShell.style.setProperty("--oj-search-start-height", `${Math.round(rect.height)}px`);
+            floatingInput.placeholder = liveSourceInput.getAttribute("placeholder") || "";
+            floatingInput.value = liveSourceInput.value || "";
+            sourceShell.classList.add("oj-header-search-shell--source-hidden");
+
+            activeSearchSession = {
+                sourceShell,
+                sourceInput: liveSourceInput,
+                floatingShell,
+                floatingInput,
+                veil
+            };
+
+            veil.classList.add("oj-search-veil--active");
+
+            window.requestAnimationFrame(() => {
+                if (activeSearchSession?.sourceInput !== liveSourceInput) {
+                    return;
+                }
+                floatingShell.classList.add("oj-floating-search--active");
+                floatingInput.focus({preventScroll: true});
+                liveSourceInput.blur();
+                const valueLength = floatingInput.value.length;
+                floatingInput.setSelectionRange(valueLength, valueLength);
+            });
+        };
+
+        const bindSearchFieldBehavior = () => {
             doc.querySelectorAll(".oj-header-search-shell input.ant-select-search__field").forEach((input) => {
                 if (input.dataset.ojSearchBound === "1") {
                     return;
                 }
                 input.dataset.ojSearchBound = "1";
 
-                const swallowInputEvent = (event) => {
-                    event.stopPropagation();
-                    event.stopImmediatePropagation();
-                };
-
-                input.addEventListener("pointerdown", swallowInputEvent, true);
-                input.addEventListener("mousedown", swallowInputEvent, true);
-                input.addEventListener("click", swallowInputEvent, true);
-
                 input.addEventListener("focus", () => {
                     activateSearchShell(input);
                 });
 
-                const swallowKeyEvent = (event) => {
-                    if (event.key === "Escape") {
-                        return;
-                    }
-                    event.stopPropagation();
-                    event.stopImmediatePropagation();
-                };
-
-                input.addEventListener("keydown", swallowKeyEvent, true);
-                input.addEventListener("keypress", swallowKeyEvent, true);
-                input.addEventListener("keyup", swallowKeyEvent, true);
-
                 input.addEventListener("keydown", (event) => {
                     if (event.key === "Escape") {
                         event.preventDefault();
-                        event.stopPropagation();
-                        event.stopImmediatePropagation();
-                        deactivateSearchShell(false);
                     }
                 }, true);
             });
@@ -1636,6 +1872,7 @@
         patchSearchIcon();
         patchHeaderSearchField();
         bindSearchFieldBehavior();
+        bindMenuCollapseCooldown();
         ensureSearchVeil();
 
         if (!doc.body.dataset.ojTriggerObserverBound) {
@@ -1644,6 +1881,7 @@
                 patchSearchIcon();
                 patchHeaderSearchField();
                 bindSearchFieldBehavior();
+                bindMenuCollapseCooldown();
             });
             observer.observe(doc.body, {
                 childList: true,

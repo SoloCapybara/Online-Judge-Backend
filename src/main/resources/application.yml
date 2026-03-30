@@ -1,5 +1,5 @@
 server:
-  port: 8101
+  port: 8080
   servlet:
     context-path: /api
 
@@ -35,7 +35,6 @@ mybatis-plus:
   type-aliases-package: com.dxd.oj.model.entity
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
   global-config:
     db-config:
       id-type: assign_id
@@ -68,3 +67,24 @@ logging:
   level:
     com.dxd.oj: info
     org.springframework.security: warn
+    org.mybatis: warn
+    org.mybatis.spring: warn
+    com.baomidou.mybatisplus: warn
+
+oj:
+  auth:
+    jwt:
+      secret: ${OJ_JWT_SECRET:OnlineJudgeJwtSecretKeyChangeMe_2026_03_30}
+      expire-seconds: ${OJ_JWT_EXPIRE_SECONDS:7200}
+    redis-token-prefix: ${OJ_REDIS_TOKEN_PREFIX:oj:auth:token:}
+  bootstrap:
+    super-admin:
+      enabled: true
+      username: ${OJ_SUPER_ADMIN_USERNAME:admin}
+      password: ${OJ_SUPER_ADMIN_PASSWORD:Admin@123456}
+      real-name: ${OJ_SUPER_ADMIN_REAL_NAME:System Admin}
+      force-reset-password: ${OJ_SUPER_ADMIN_FORCE_RESET_PASSWORD:false}
+  file:
+    upload-dir: ${OJ_FILE_UPLOAD_DIR:${user.home}/online-judge/uploads}
+    public-url-prefix: ${OJ_FILE_PUBLIC_URL_PREFIX:/uploads}
+    max-avatar-size-mb: ${OJ_FILE_MAX_AVATAR_SIZE_MB:5}
