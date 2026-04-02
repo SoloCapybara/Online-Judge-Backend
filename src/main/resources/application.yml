@@ -88,3 +88,8 @@ oj:
     upload-dir: ${OJ_FILE_UPLOAD_DIR:${user.home}/online-judge/uploads}
     public-url-prefix: ${OJ_FILE_PUBLIC_URL_PREFIX:/uploads}
     max-avatar-size-mb: ${OJ_FILE_MAX_AVATAR_SIZE_MB:5}
+  run:
+    default-time-limit-ms: ${OJ_RUN_DEFAULT_TIME_LIMIT_MS:15000}
+    max-time-limit-ms: ${OJ_RUN_MAX_TIME_LIMIT_MS:30000}
+    max-output-length: ${OJ_RUN_MAX_OUTPUT_LENGTH:65536}
+    python-cmd: ${OJ_RUN_PYTHON_CMD:python3.14}

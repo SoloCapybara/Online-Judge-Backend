@@ -24,6 +24,7 @@ import com.dxd.oj.service.AuthService;
 import com.dxd.oj.service.ProblemService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
@@ -53,6 +54,7 @@ public class ProblemServiceImpl implements ProblemService {
     private final ProblemCategoryMapper problemCategoryMapper;
     private final SysUserMapper sysUserMapper;
     private final AuthService authService;
+    private final JdbcTemplate jdbcTemplate;
 
     @Override
     public IPage<ProblemVO> pageProblems(ProblemPageQueryRequest queryRequest, String token) {
@@ -108,6 +110,7 @@ public class ProblemServiceImpl implements ProblemService {
         LoginUserVO loginUser = getLoginUser(token);
         checkManagerRole(loginUser);
         validateJudgeMode(request.getJudgeMode());
+        validateCategory(request.getCategoryId());
 
         Problem problem = new Problem();
         problem.setTitle(trimText(request.getTitle()));
@@ -145,6 +148,7 @@ public class ProblemServiceImpl implements ProblemService {
         LoginUserVO loginUser = getLoginUser(token);
         checkManagerRole(loginUser);
         validateJudgeMode(request.getJudgeMode());
+        validateCategory(request.getCategoryId());
 
         Problem exists = problemMapper.selectById(problemId);
         if (exists == null) {
@@ -190,12 +194,36 @@ public class ProblemServiceImpl implements ProblemService {
         }
         checkCreatorOrAdmin(loginUser, exists.getCreatorId());
 
-        exists.setStatus(STATUS_OFFLINE);
-        int rows = problemMapper.updateById(exists);
-        if (rows <= 0) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "删除题目失败");
+        // 第一段删除：若未下线，则先逻辑下线
+        if (exists.getStatus() == null || exists.getStatus() != STATUS_OFFLINE) {
+            exists.setStatus(STATUS_OFFLINE);
+            int rows = problemMapper.updateById(exists);
+            if (rows <= 0) {
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR, "下线题目失败");
+            }
+            log.info("题库-删除题目第一阶段(逻辑下线)成功：problemId={}, operator={}", problemId, loginUser.getUsername());
+            return true;
         }
-        log.info("题库-删除题目成功(逻辑下线)：problemId={}, operator={}", problemId, loginUser.getUsername());
+
+        // 第二段删除：已下线时可物理删除（需校验关键关联）
+        long submissionCount = queryCount("select count(1) from submission where problem_id = ?", problemId);
+        if (submissionCount > 0) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "题目已有提交记录，不能物理删除");
+        }
+        long contestCount = queryCount("select count(1) from contest_problem where problem_id = ?", problemId);
+        if (contestCount > 0) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "题目已被比赛/作业引用，不能物理删除");
+        }
+
+        // 可安全删除的附属关系先清理
+        jdbcTemplate.update("delete from problem_case where problem_id = ?", problemId);
+        jdbcTemplate.update("delete from problem_tag_rel where problem_id = ?", problemId);
+
+        int rows = problemMapper.deleteById(problemId);
+        if (rows <= 0) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "物理删除题目失败");
+        }
+        log.info("题库-删除题目第二阶段(物理删除)成功：problemId={}, operator={}", problemId, loginUser.getUsername());
         return true;
     }
 
@@ -252,6 +280,19 @@ public class ProblemServiceImpl implements ProblemService {
         String value = judgeMode.trim().toUpperCase();
         if (!"ACM".equals(value) && !"OI".equals(value)) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "判题模式仅支持 ACM 或 OI");
+        }
+    }
+
+    private void validateCategory(Long categoryId) {
+        if (categoryId == null) {
+            return;
+        }
+        ProblemCategory category = problemCategoryMapper.selectById(categoryId);
+        if (category == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "分类不存在");
+        }
+        if (category.getStatus() == null || category.getStatus() != 1) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "分类已停用");
         }
     }
 
@@ -379,5 +420,10 @@ public class ProblemServiceImpl implements ProblemService {
         }
         double rate = acceptCount * 100.0 / submitCount;
         return Math.round(rate * 100.0) / 100.0;
+    }
+
+    private long queryCount(String sql, Object... args) {
+        Long count = jdbcTemplate.queryForObject(sql, Long.class, args);
+        return count == null ? 0L : count;
     }
 }
