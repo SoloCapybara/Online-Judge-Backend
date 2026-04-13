@@ -26,6 +26,7 @@ import org.springframework.util.StringUtils;
 @RequiredArgsConstructor
 public class SuperAdminBootstrapRunner implements ApplicationRunner {
 
+    private static final String SUPER_ADMIN_USERNAME = "admin";
     private static final String ADMIN_ROLE_CODE = "ADMIN";
     private static final String DEFAULT_ADMIN_PASSWORD = "Admin@123456";
 
@@ -36,9 +37,6 @@ public class SuperAdminBootstrapRunner implements ApplicationRunner {
 
     @Value("${oj.bootstrap.super-admin.enabled:true}")
     private boolean enabled;
-
-    @Value("${oj.bootstrap.super-admin.username:admin}")
-    private String username;
 
     @Value("${oj.bootstrap.super-admin.password:" + DEFAULT_ADMIN_PASSWORD + "}")
     private String password;
@@ -57,8 +55,8 @@ public class SuperAdminBootstrapRunner implements ApplicationRunner {
             return;
         }
 
-        if (!StringUtils.hasText(username) || !StringUtils.hasText(password)) {
-            log.warn("skip super admin bootstrap: username/password is blank");
+        if (!StringUtils.hasText(password)) {
+            log.warn("skip super admin bootstrap: password is blank");
             return;
         }
 
@@ -67,10 +65,10 @@ public class SuperAdminBootstrapRunner implements ApplicationRunner {
         ensureUserRoleRelation(adminUser.getId(), adminRole.getId());
 
         if (DEFAULT_ADMIN_PASSWORD.equals(password)) {
-            log.warn("super admin '{}' is using default password, change it in production", username);
+            log.warn("super admin '{}' is using default password, change it in production", SUPER_ADMIN_USERNAME);
         }
 
-        log.info("super admin bootstrap finished: username={}", username);
+        log.info("super admin bootstrap finished: username={}", SUPER_ADMIN_USERNAME);
     }
 
     private SysRole ensureAdminRole() {
@@ -91,11 +89,11 @@ public class SuperAdminBootstrapRunner implements ApplicationRunner {
 
     private SysUser ensureAdminUser() {
         SysUser user = sysUserMapper.selectOne(new LambdaQueryWrapper<SysUser>()
-                .eq(SysUser::getUsername, username.trim())
+                .eq(SysUser::getUsername, SUPER_ADMIN_USERNAME)
                 .last("limit 1"));
         if (user == null) {
             SysUser newUser = new SysUser();
-            newUser.setUsername(username.trim());
+            newUser.setUsername(SUPER_ADMIN_USERNAME);
             newUser.setPassword(passwordEncoder.encode(password));
             newUser.setRealName(StringUtils.hasText(realName) ? realName.trim() : "System Admin");
             newUser.setStatus(1);
@@ -133,4 +131,3 @@ public class SuperAdminBootstrapRunner implements ApplicationRunner {
         sysUserRoleMapper.insert(userRole);
     }
 }
-

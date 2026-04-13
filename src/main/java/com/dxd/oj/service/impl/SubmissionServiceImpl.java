@@ -5,6 +5,9 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.dxd.oj.common.ErrorCode;
 import com.dxd.oj.exception.BusinessException;
+import com.dxd.oj.mapper.ContestMapper;
+import com.dxd.oj.mapper.ContestProblemMapper;
+import com.dxd.oj.mapper.ContestUserMapper;
 import com.dxd.oj.mapper.ProblemCaseMapper;
 import com.dxd.oj.mapper.ProblemMapper;
 import com.dxd.oj.mapper.SubmissionCaseMapper;
@@ -13,6 +16,9 @@ import com.dxd.oj.mapper.SysUserMapper;
 import com.dxd.oj.model.dto.run.RunCodeRequest;
 import com.dxd.oj.model.dto.submission.SubmissionCreateRequest;
 import com.dxd.oj.model.dto.submission.SubmissionPageQueryRequest;
+import com.dxd.oj.model.entity.Contest;
+import com.dxd.oj.model.entity.ContestProblem;
+import com.dxd.oj.model.entity.ContestUser;
 import com.dxd.oj.model.entity.Problem;
 import com.dxd.oj.model.entity.ProblemCase;
 import com.dxd.oj.model.entity.Submission;
@@ -26,6 +32,7 @@ import com.dxd.oj.model.vo.SubmissionCreateVO;
 import com.dxd.oj.model.vo.SubmissionDetailVO;
 import com.dxd.oj.model.vo.SubmissionVO;
 import com.dxd.oj.service.AuthService;
+import com.dxd.oj.service.ContestRankService;
 import com.dxd.oj.service.RunService;
 import com.dxd.oj.service.SubmissionService;
 import lombok.RequiredArgsConstructor;
@@ -47,6 +54,8 @@ public class SubmissionServiceImpl implements SubmissionService {
 
     private static final String ROLE_ADMIN = "ADMIN";
     private static final String ROLE_TEACHER = "TEACHER";
+    private static final int CONTEST_STATUS_PUBLISHED = 1;
+    private static final int CONTEST_STATUS_ENDED = 2;
 
     private static final String STATUS_WAITING = "WAITING";
     private static final String STATUS_JUDGING = "JUDGING";
@@ -69,12 +78,18 @@ public class SubmissionServiceImpl implements SubmissionService {
 
     private final SubmissionMapper submissionMapper;
     private final SubmissionCaseMapper submissionCaseMapper;
+    private final ContestMapper contestMapper;
+    private final ContestProblemMapper contestProblemMapper;
+    private final ContestUserMapper contestUserMapper;
     private final ProblemMapper problemMapper;
     private final ProblemCaseMapper problemCaseMapper;
     private final SysUserMapper sysUserMapper;
     private final AuthService authService;
+    private final ContestRankService contestRankService;
     private final RunService runService;
     private final JdbcTemplate jdbcTemplate;
+
+    private static final int MAX_SOURCE_CODE_LENGTH = 200000;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -87,6 +102,7 @@ public class SubmissionServiceImpl implements SubmissionService {
             throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "题目不存在");
         }
         checkProblemVisible(problem, loginUser);
+        validateContestSubmissionContext(request, loginUser, problem);
 
         List<ProblemCase> cases = listProblemCases(problem.getId());
         if (CollectionUtils.isEmpty(cases)) {
@@ -111,6 +127,9 @@ public class SubmissionServiceImpl implements SubmissionService {
         JudgeSummary summary = doJudge(submission, problem, cases, token);
         if (STATUS_ACCEPTED.equals(summary.finalStatus())) {
             increaseProblemAcceptCount(problem.getId());
+        }
+        if (submission.getContestId() != null && submission.getContestId() > 0) {
+            contestRankService.refreshUserRank(submission.getContestId(), submission.getUserId());
         }
 
         SubmissionCreateVO response = new SubmissionCreateVO();
@@ -226,6 +245,9 @@ public class SubmissionServiceImpl implements SubmissionService {
         boolean newAccepted = STATUS_ACCEPTED.equals(summary.finalStatus());
         if (oldAccepted != newAccepted) {
             adjustProblemAcceptCount(problem.getId(), newAccepted ? 1 : -1);
+        }
+        if (submission.getContestId() != null && submission.getContestId() > 0) {
+            contestRankService.refreshUserRank(submission.getContestId(), submission.getUserId());
         }
         return true;
     }
@@ -426,12 +448,16 @@ public class SubmissionServiceImpl implements SubmissionService {
         }
         Set<Long> userIds = new LinkedHashSet<>();
         Set<Long> problemIds = new LinkedHashSet<>();
+        Set<Long> contestIds = new LinkedHashSet<>();
         records.forEach(item -> {
             if (item.getUserId() != null) {
                 userIds.add(item.getUserId());
             }
             if (item.getProblemId() != null) {
                 problemIds.add(item.getProblemId());
+            }
+            if (item.getContestId() != null) {
+                contestIds.add(item.getContestId());
             }
         });
 
@@ -443,6 +469,10 @@ public class SubmissionServiceImpl implements SubmissionService {
         if (!problemIds.isEmpty()) {
             problemMapper.selectBatchIds(problemIds).forEach(problem -> problemMap.put(problem.getId(), problem));
         }
+        Map<Long, Contest> contestMap = new LinkedHashMap<>();
+        if (!contestIds.isEmpty()) {
+            contestMapper.selectBatchIds(contestIds).forEach(contest -> contestMap.put(contest.getId(), contest));
+        }
 
         records.forEach(item -> {
             SysUser user = userMap.get(item.getUserId());
@@ -453,6 +483,11 @@ public class SubmissionServiceImpl implements SubmissionService {
             Problem problem = problemMap.get(item.getProblemId());
             if (problem != null) {
                 item.setProblemTitle(problem.getTitle());
+            }
+            Contest contest = contestMap.get(item.getContestId());
+            if (contest != null) {
+                item.setContestTitle(contest.getTitle());
+                item.setContestType(contest.getType());
             }
         });
     }
@@ -472,6 +507,13 @@ public class SubmissionServiceImpl implements SubmissionService {
             Problem problem = problemMapper.selectById(detail.getProblemId());
             if (problem != null) {
                 detail.setProblemTitle(problem.getTitle());
+            }
+        }
+        if (detail.getContestId() != null) {
+            Contest contest = contestMapper.selectById(detail.getContestId());
+            if (contest != null) {
+                detail.setContestTitle(contest.getTitle());
+                detail.setContestType(contest.getType());
             }
         }
     }
@@ -565,6 +607,72 @@ public class SubmissionServiceImpl implements SubmissionService {
         }
         if (problem.getStatus() == null || problem.getStatus() != 1) {
             throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "当前题目不可提交");
+        }
+    }
+
+    private void validateContestSubmissionContext(SubmissionCreateRequest request, LoginUserVO loginUser, Problem problem) {
+        if (request.getContestId() == null) {
+            return;
+        }
+        if (request.getContestId() <= 0) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "比赛ID不合法");
+        }
+        Long contestId = request.getContestId();
+        Contest contest = contestMapper.selectById(contestId);
+        if (contest == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "比赛不存在");
+        }
+        Long includedCount = contestProblemMapper.selectCount(new LambdaQueryWrapper<ContestProblem>()
+                .eq(ContestProblem::getContestId, contestId)
+                .eq(ContestProblem::getProblemId, problem.getId()));
+        if (includedCount == null || includedCount <= 0) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "该题目不在当前比赛题目集内");
+        }
+
+        boolean manager = isManager(loginUser);
+        if (!manager) {
+            if (contest.getStatus() == null || contest.getStatus() != CONTEST_STATUS_PUBLISHED) {
+                if (contest.getStatus() != null && contest.getStatus() == CONTEST_STATUS_ENDED) {
+                    throw new BusinessException(ErrorCode.OPERATION_ERROR, "比赛已结束，无法提交");
+                }
+                throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "当前比赛不可提交");
+            }
+
+            LocalDateTime now = LocalDateTime.now();
+            if (contest.getStartTime() != null && now.isBefore(contest.getStartTime())) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "比赛未开始，暂不能提交");
+            }
+            if (contest.getEndTime() != null && now.isAfter(contest.getEndTime())) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "比赛已结束，无法提交");
+            }
+
+            Long joinCount = contestUserMapper.selectCount(new LambdaQueryWrapper<ContestUser>()
+                    .eq(ContestUser::getContestId, contestId)
+                    .eq(ContestUser::getUserId, loginUser.getId()));
+            if (joinCount == null || joinCount <= 0) {
+                throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "请先报名比赛后再提交");
+            }
+        }
+
+        if ("CONTEST".equalsIgnoreCase(contest.getType())) {
+            Long acceptedCount = submissionMapper.selectCount(new LambdaQueryWrapper<Submission>()
+                    .eq(Submission::getContestId, contestId)
+                    .eq(Submission::getUserId, loginUser.getId())
+                    .eq(Submission::getProblemId, problem.getId())
+                    .eq(Submission::getStatus, STATUS_ACCEPTED));
+            if (acceptedCount != null && acceptedCount > 0) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "该题已通过，比赛模式下不可再次提交");
+            }
+        }
+
+        if (contest.getSubmitLimit() != null && contest.getSubmitLimit() > 0) {
+            Long submitCount = submissionMapper.selectCount(new LambdaQueryWrapper<Submission>()
+                    .eq(Submission::getContestId, contestId)
+                    .eq(Submission::getUserId, loginUser.getId())
+                    .eq(Submission::getProblemId, problem.getId()));
+            if (submitCount != null && submitCount >= contest.getSubmitLimit()) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "已达到该题目提交次数上限");
+            }
         }
     }
 

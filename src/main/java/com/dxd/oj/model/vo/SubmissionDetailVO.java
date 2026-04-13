@@ -31,6 +31,12 @@ public class SubmissionDetailVO implements Serializable {
     @Schema(description = "比赛/作业ID")
     private Long contestId;
 
+    @Schema(description = "比赛/作业标题")
+    private String contestTitle;
+
+    @Schema(description = "比赛/作业类型：CONTEST / HOMEWORK")
+    private String contestType;
+
     @Schema(description = "语言")
     private String language;
 

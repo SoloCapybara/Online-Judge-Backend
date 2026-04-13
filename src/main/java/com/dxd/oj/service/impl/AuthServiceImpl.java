@@ -41,6 +41,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
 
+    private static final String SUPER_ADMIN_USERNAME = "admin";
     private static final String DEFAULT_ROLE_CODE = "STUDENT";
     private static final String LOGIN_TYPE_PASSWORD = "PASSWORD";
 
@@ -194,7 +195,12 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "请求参数不能为空");
         }
 
-        if (request.getUsername().trim().length() < 4) {
+        String username = request.getUsername().trim();
+        if (SUPER_ADMIN_USERNAME.equalsIgnoreCase(username)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户名已被系统保留");
+        }
+
+        if (username.length() < 4) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户名长度不能小于4位");
         }
 
