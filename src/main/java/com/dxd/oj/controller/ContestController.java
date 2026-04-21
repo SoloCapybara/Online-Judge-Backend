@@ -8,10 +8,12 @@ import com.dxd.oj.model.dto.contest.ContestCreateRequest;
 import com.dxd.oj.model.dto.contest.ContestPageQueryRequest;
 import com.dxd.oj.model.dto.contest.ContestRankPageQueryRequest;
 import com.dxd.oj.model.dto.contest.ContestRegisterRequest;
+import com.dxd.oj.model.dto.contest.ContestScorePageQueryRequest;
 import com.dxd.oj.model.dto.contest.ContestStatusUpdateRequest;
 import com.dxd.oj.model.vo.ContestCreateVO;
 import com.dxd.oj.model.vo.ContestDetailVO;
 import com.dxd.oj.model.vo.ContestRankVO;
+import com.dxd.oj.model.vo.ContestScoreVO;
 import com.dxd.oj.model.vo.ContestVO;
 import com.dxd.oj.model.vo.PageVO;
 import com.dxd.oj.service.ContestService;
@@ -21,6 +23,10 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,7 +35,12 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
+import java.util.Locale;
 
 @Tag(name = "比赛/作业")
 @RestController
@@ -109,6 +120,52 @@ public class ContestController {
         String token = extractToken(httpServletRequest);
         IPage<ContestRankVO> pageResult = contestService.pageContestRank(id, queryRequest, token);
         return ResultUtils.success(PageVO.of(pageResult));
+    }
+
+    @Operation(summary = "比赛成绩总览分页", description = "仅教师/管理员可查看。支持用户名与班级关键词筛选（班级关键词当前按学号/工号匹配）。")
+    @GetMapping("/{id}/score/page")
+    public BaseResponse<PageVO<ContestScoreVO>> pageContestScore(@Parameter(description = "比赛ID", required = true)
+                                                                 @PathVariable("id") Long id,
+                                                                 ContestScorePageQueryRequest queryRequest,
+                                                                 HttpServletRequest httpServletRequest) {
+        String token = extractToken(httpServletRequest);
+        IPage<ContestScoreVO> pageResult = contestService.pageContestScore(id, queryRequest, token);
+        return ResultUtils.success(PageVO.of(pageResult));
+    }
+
+    @Operation(summary = "导出比赛成绩总览", description = "仅教师/管理员可导出。支持 CSV / Excel(xlsx)，并按用户名与班级关键词筛选。")
+    @GetMapping("/{id}/score/export")
+    public ResponseEntity<byte[]> exportContestScore(@Parameter(description = "比赛ID", required = true)
+                                                     @PathVariable("id") Long id,
+                                                     @Parameter(description = "导出格式：csv 或 xlsx")
+                                                     @RequestParam(value = "format", required = false, defaultValue = "csv") String format,
+                                                     ContestScorePageQueryRequest queryRequest,
+                                                     HttpServletRequest httpServletRequest) {
+        String token = extractToken(httpServletRequest);
+        String normalizedFormat = format == null ? "csv" : format.trim().toLowerCase(Locale.ROOT);
+        if (!"csv".equals(normalizedFormat) && !"xlsx".equals(normalizedFormat)) {
+            normalizedFormat = "csv";
+        }
+
+        byte[] fileBytes;
+        MediaType mediaType;
+        String fileName;
+        if ("xlsx".equals(normalizedFormat)) {
+            fileBytes = contestService.exportContestScoreExcel(id, queryRequest, token);
+            mediaType = MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            fileName = "contest-score-" + id + "-" + LocalDate.now() + ".xlsx";
+        } else {
+            fileBytes = contestService.exportContestScoreCsv(id, queryRequest, token);
+            mediaType = new MediaType("text", "csv", StandardCharsets.UTF_8);
+            fileName = "contest-score-" + id + "-" + LocalDate.now() + ".csv";
+        }
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(mediaType);
+        headers.setContentDisposition(ContentDisposition.attachment()
+                .filename(fileName, StandardCharsets.UTF_8)
+                .build());
+        return ResponseEntity.ok().headers(headers).body(fileBytes);
     }
 
     @Operation(summary = "删除比赛/作业", description = "仅比赛创建者(教师)或管理员可操作。删除后将级联清理题目绑定、报名、提交记录与榜单缓存。")

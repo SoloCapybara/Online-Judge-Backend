@@ -4,16 +4,20 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.dxd.oj.common.ErrorCode;
 import com.dxd.oj.exception.BusinessException;
 import com.dxd.oj.mapper.SysUserMapper;
+import com.dxd.oj.mapper.SubmissionMapper;
 import com.dxd.oj.model.dto.user.UserPasswordUpdateRequest;
 import com.dxd.oj.model.dto.user.UserProfileUpdateRequest;
+import com.dxd.oj.model.entity.Submission;
 import com.dxd.oj.model.entity.SysUser;
 import com.dxd.oj.model.vo.LoginUserVO;
 import com.dxd.oj.model.vo.UserProfileVO;
+import com.dxd.oj.model.vo.UserProfileStatsVO;
 import com.dxd.oj.service.AuthService;
 import com.dxd.oj.service.UserProfileService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,8 +29,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.sql.Date;
 import java.time.LocalDate;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 @Slf4j
@@ -34,8 +42,12 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class UserProfileServiceImpl implements UserProfileService {
 
+    private static final String STATUS_ACCEPTED = "ACCEPTED";
+
     private final AuthService authService;
     private final SysUserMapper sysUserMapper;
+    private final SubmissionMapper submissionMapper;
+    private final JdbcTemplate jdbcTemplate;
     private final PasswordEncoder passwordEncoder;
 
     @Value("${oj.file.upload-dir:${user.home}/online-judge/uploads}")
@@ -55,6 +67,27 @@ public class UserProfileServiceImpl implements UserProfileService {
             throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "用户不存在");
         }
         return toUserProfileVO(user);
+    }
+
+    @Override
+    public UserProfileStatsVO getCurrentUserStats(String token) {
+        Long userId = getLoginUserId(token);
+        long submitCount = safeLong(submissionMapper.selectCount(new LambdaQueryWrapper<Submission>()
+                .eq(Submission::getUserId, userId)));
+        long acceptedCount = safeLong(submissionMapper.selectCount(new LambdaQueryWrapper<Submission>()
+                .eq(Submission::getUserId, userId)
+                .eq(Submission::getStatus, STATUS_ACCEPTED)));
+        long solvedCount = querySolvedCount(userId);
+        List<LocalDate> activeDays = queryActiveDays(userId);
+
+        UserProfileStatsVO stats = new UserProfileStatsVO();
+        stats.setSolvedCount(solvedCount);
+        stats.setSubmitCount(submitCount);
+        stats.setAcceptedCount(acceptedCount);
+        stats.setAcRate(calcAcRate(submitCount, acceptedCount));
+        stats.setCurrentStreakDays(calcCurrentStreak(activeDays));
+        stats.setLongestStreakDays(calcLongestStreak(activeDays));
+        return stats;
     }
 
     @Override
@@ -273,5 +306,73 @@ public class UserProfileServiceImpl implements UserProfileService {
         profileVO.setGender(user.getGender());
         profileVO.setStatus(user.getStatus());
         return profileVO;
+    }
+
+    private long querySolvedCount(Long userId) {
+        Long value = jdbcTemplate.queryForObject(
+                "select count(distinct problem_id) from submission where user_id = ? and status = ?",
+                Long.class,
+                userId,
+                STATUS_ACCEPTED
+        );
+        return safeLong(value);
+    }
+
+    private List<LocalDate> queryActiveDays(Long userId) {
+        return jdbcTemplate.query(
+                "select distinct date(submit_time) as submit_day from submission where user_id = ? order by submit_day asc",
+                (rs, rowNum) -> {
+                    Date date = rs.getDate("submit_day");
+                    return date == null ? null : date.toLocalDate();
+                },
+                userId
+        ).stream().filter(day -> day != null).toList();
+    }
+
+    private double calcAcRate(long submitCount, long acceptedCount) {
+        if (submitCount <= 0) {
+            return 0D;
+        }
+        double rate = acceptedCount * 100D / submitCount;
+        return Math.round(rate * 100D) / 100D;
+    }
+
+    private int calcCurrentStreak(List<LocalDate> activeDays) {
+        if (activeDays == null || activeDays.isEmpty()) {
+            return 0;
+        }
+        Set<LocalDate> daySet = new HashSet<>(activeDays);
+        LocalDate cursor = LocalDate.now();
+        int streak = 0;
+        while (daySet.contains(cursor)) {
+            streak++;
+            cursor = cursor.minusDays(1);
+        }
+        return streak;
+    }
+
+    private int calcLongestStreak(List<LocalDate> activeDays) {
+        if (activeDays == null || activeDays.isEmpty()) {
+            return 0;
+        }
+        int best = 1;
+        int current = 1;
+        for (int i = 1; i < activeDays.size(); i++) {
+            LocalDate prev = activeDays.get(i - 1);
+            LocalDate now = activeDays.get(i);
+            if (now.equals(prev.plusDays(1))) {
+                current++;
+            } else if (now.equals(prev)) {
+                continue;
+            } else {
+                current = 1;
+            }
+            best = Math.max(best, current);
+        }
+        return best;
+    }
+
+    private long safeLong(Long value) {
+        return value == null ? 0L : Math.max(0L, value);
     }
 }

@@ -5,6 +5,7 @@ import com.dxd.oj.common.ResultUtils;
 import com.dxd.oj.model.dto.user.UserPasswordUpdateRequest;
 import com.dxd.oj.model.dto.user.UserProfileUpdateRequest;
 import com.dxd.oj.model.vo.UserProfileVO;
+import com.dxd.oj.model.vo.UserProfileStatsVO;
 import com.dxd.oj.service.UserProfileService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -37,6 +38,14 @@ public class UserProfileController {
         String token = extractToken(request);
         UserProfileVO profileVO = userProfileService.getCurrentUserProfile(token);
         return ResultUtils.success(profileVO);
+    }
+
+    @Operation(summary = "获取当前用户统计信息", description = "返回已通过题目数、总提交数、AC率与连续打卡统计。")
+    @GetMapping("/stats")
+    public BaseResponse<UserProfileStatsVO> getCurrentUserStats(HttpServletRequest request) {
+        String token = extractToken(request);
+        UserProfileStatsVO statsVO = userProfileService.getCurrentUserStats(token);
+        return ResultUtils.success(statsVO);
     }
 
     @Operation(summary = "更新当前用户个人信息", description = "更新真实姓名、学号、邮箱、手机号、头像URL、性别。")

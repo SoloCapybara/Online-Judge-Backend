@@ -17,6 +17,7 @@ import com.dxd.oj.model.dto.contest.ContestPageQueryRequest;
 import com.dxd.oj.model.dto.contest.ContestProblemBindItemDTO;
 import com.dxd.oj.model.dto.contest.ContestRankPageQueryRequest;
 import com.dxd.oj.model.dto.contest.ContestRegisterRequest;
+import com.dxd.oj.model.dto.contest.ContestScorePageQueryRequest;
 import com.dxd.oj.model.dto.contest.ContestStatusUpdateRequest;
 import com.dxd.oj.model.entity.Contest;
 import com.dxd.oj.model.entity.ContestProblem;
@@ -28,6 +29,7 @@ import com.dxd.oj.model.vo.ContestCreateVO;
 import com.dxd.oj.model.vo.ContestDetailVO;
 import com.dxd.oj.model.vo.ContestProblemVO;
 import com.dxd.oj.model.vo.ContestRankVO;
+import com.dxd.oj.model.vo.ContestScoreVO;
 import com.dxd.oj.model.vo.ContestVO;
 import com.dxd.oj.model.vo.LoginUserVO;
 import com.dxd.oj.service.AuthService;
@@ -35,14 +37,32 @@ import com.dxd.oj.service.ContestRankService;
 import com.dxd.oj.service.ContestService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.ss.usermodel.BorderStyle;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.FillPatternType;
+import org.apache.poi.ss.usermodel.Font;
+import org.apache.poi.ss.usermodel.HorizontalAlignment;
+import org.apache.poi.ss.usermodel.IndexedColors;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.VerticalAlignment;
+import org.apache.poi.ss.util.CellRangeAddress;
+import org.apache.poi.xssf.usermodel.XSSFSheet;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -71,6 +91,7 @@ public class ContestServiceImpl implements ContestService {
 
     private static final String RESULT_VISIBLE_REALTIME = "REALTIME";
     private static final String RESULT_VISIBLE_AFTER_END = "AFTER_END";
+    private static final DateTimeFormatter EXPORT_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final ContestMapper contestMapper;
     private final ContestProblemMapper contestProblemMapper;
@@ -344,6 +365,124 @@ public class ContestServiceImpl implements ContestService {
     }
 
     @Override
+    public IPage<ContestScoreVO> pageContestScore(Long contestId, ContestScorePageQueryRequest queryRequest, String token) {
+        ContestScorePageQueryRequest safeQuery = queryRequest == null ? new ContestScorePageQueryRequest() : queryRequest;
+        long current = safeQuery.getCurrent() <= 0 ? 1 : safeQuery.getCurrent();
+        long pageSize = safeQuery.getPageSize() <= 0 ? 20 : Math.min(safeQuery.getPageSize(), 100);
+        List<ContestScoreVO> filtered = listContestScores(contestId, safeQuery, token);
+
+        long total = filtered.size();
+        if (total <= 0) {
+            return emptyContestScorePage(current, pageSize, 0L);
+        }
+
+        long start = (current - 1) * pageSize;
+        if (start >= total) {
+            return emptyContestScorePage(current, pageSize, total);
+        }
+        int fromIndex = (int) start;
+        int toIndex = (int) Math.min(total, start + pageSize);
+
+        Page<ContestScoreVO> page = new Page<>(current, pageSize, total);
+        page.setRecords(new ArrayList<>(filtered.subList(fromIndex, toIndex)));
+        return page;
+    }
+
+    @Override
+    public byte[] exportContestScoreCsv(Long contestId, ContestScorePageQueryRequest queryRequest, String token) {
+        List<ContestScoreVO> rows = listContestScores(contestId, queryRequest, token);
+        StringBuilder builder = new StringBuilder(4096);
+        builder.append('\uFEFF');
+        builder.append("排名,用户ID,用户名,姓名,学号/工号,总分,已AC题数,罚时(分钟),提交数\n");
+        for (ContestScoreVO item : rows) {
+            builder.append(item.getRank() == null ? "" : item.getRank()).append(',')
+                    .append(item.getUserId() == null ? "" : item.getUserId()).append(',')
+                    .append(csvEscape(item.getUsername())).append(',')
+                    .append(csvEscape(item.getRealName())).append(',')
+                    .append(csvEscape(item.getStudentNo())).append(',')
+                    .append(safeInt(item.getTotalScore())).append(',')
+                    .append(safeInt(item.getAcCount())).append(',')
+                    .append(safeInt(item.getPenaltyMinutes())).append(',')
+                    .append(safeInt(item.getSubmitCount()))
+                    .append('\n');
+        }
+        return builder.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Override
+    public byte[] exportContestScoreExcel(Long contestId, ContestScorePageQueryRequest queryRequest, String token) {
+        List<ContestScoreVO> rows = listContestScores(contestId, queryRequest, token);
+        final int lastColumnIndex = 8;
+        final String[] headers = {
+                "排名", "用户ID", "用户名", "姓名", "学号/工号", "总分", "已AC题数", "罚时(分钟)", "提交数"
+        };
+
+        try (XSSFWorkbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            XSSFSheet sheet = workbook.createSheet("成绩总览");
+            Map<String, CellStyle> styles = createExportStyles(workbook);
+
+            Row titleRow = sheet.createRow(0);
+            titleRow.setHeightInPoints(28);
+            for (int i = 0; i <= lastColumnIndex; i++) {
+                createTextCell(titleRow, i, "", styles.get("title"));
+            }
+            titleRow.getCell(0).setCellValue("比赛/作业成绩总览");
+            sheet.addMergedRegion(new CellRangeAddress(0, 0, 0, lastColumnIndex));
+
+            Row infoRow = sheet.createRow(1);
+            infoRow.setHeightInPoints(22);
+            for (int i = 0; i <= lastColumnIndex; i++) {
+                createTextCell(infoRow, i, "", styles.get("meta"));
+            }
+            infoRow.getCell(0).setCellValue("导出时间：");
+            infoRow.getCell(1).setCellValue(LocalDateTime.now().format(EXPORT_TIME_FORMATTER));
+            sheet.addMergedRegion(new CellRangeAddress(1, 1, 1, 3));
+            infoRow.getCell(4).setCellValue("记录数：");
+            infoRow.getCell(5).setCellValue(rows.size());
+            sheet.addMergedRegion(new CellRangeAddress(1, 1, 5, 8));
+
+            Row headerRow = sheet.createRow(2);
+            headerRow.setHeightInPoints(24);
+            for (int i = 0; i < headers.length; i++) {
+                createTextCell(headerRow, i, headers[i], styles.get("header"));
+            }
+
+            for (int i = 0; i < rows.size(); i++) {
+                ContestScoreVO item = rows.get(i);
+                Row row = sheet.createRow(i + 3);
+                boolean odd = i % 2 == 0;
+                CellStyle textStyle = odd ? styles.get("bodyTextOdd") : styles.get("bodyTextEven");
+                CellStyle numberStyle = odd ? styles.get("bodyNumberOdd") : styles.get("bodyNumberEven");
+
+                createNumberCell(row, 0, item.getRank(), numberStyle);
+                createNumberCell(row, 1, item.getUserId(), numberStyle);
+                createTextCell(row, 2, item.getUsername(), textStyle);
+                createTextCell(row, 3, item.getRealName(), textStyle);
+                createTextCell(row, 4, item.getStudentNo(), numberStyle);
+                createNumberCell(row, 5, safeInt(item.getTotalScore()), numberStyle);
+                createNumberCell(row, 6, safeInt(item.getAcCount()), numberStyle);
+                createNumberCell(row, 7, safeInt(item.getPenaltyMinutes()), numberStyle);
+                createNumberCell(row, 8, safeInt(item.getSubmitCount()), numberStyle);
+            }
+
+            sheet.createFreezePane(0, 3);
+            int lastRowIndex = Math.max(2, rows.size() + 2);
+            sheet.setAutoFilter(new CellRangeAddress(2, lastRowIndex, 0, lastColumnIndex));
+
+            int[] widths = {10, 22, 22, 16, 18, 10, 12, 14, 10};
+            for (int i = 0; i < widths.length; i++) {
+                sheet.setColumnWidth(i, widths[i] * 256);
+            }
+
+            workbook.write(outputStream);
+            return outputStream.toByteArray();
+        } catch (IOException e) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "导出 Excel 失败");
+        }
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean deleteContest(Long contestId, String token) {
         if (contestId == null || contestId <= 0) {
@@ -595,6 +734,334 @@ public class ContestServiceImpl implements ContestService {
         return parsed == null ? 0L : Math.max(0L, parsed);
     }
 
+    private int safeInt(Integer value) {
+        return value == null ? 0 : value;
+    }
+
+    private Map<String, CellStyle> createExportStyles(XSSFWorkbook workbook) {
+        Map<String, CellStyle> styles = new HashMap<>();
+
+        Font titleFont = workbook.createFont();
+        titleFont.setBold(true);
+        titleFont.setColor(IndexedColors.WHITE.getIndex());
+        titleFont.setFontHeightInPoints((short) 14);
+
+        Font headerFont = workbook.createFont();
+        headerFont.setBold(true);
+        headerFont.setColor(IndexedColors.WHITE.getIndex());
+
+        Font bodyFont = workbook.createFont();
+        bodyFont.setFontHeightInPoints((short) 11);
+
+        CellStyle title = workbook.createCellStyle();
+        title.setFillForegroundColor(IndexedColors.TEAL.getIndex());
+        title.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        title.setAlignment(HorizontalAlignment.CENTER);
+        title.setVerticalAlignment(VerticalAlignment.CENTER);
+        title.setFont(titleFont);
+        applyThinBorder(title);
+        styles.put("title", title);
+
+        CellStyle meta = workbook.createCellStyle();
+        meta.setFillForegroundColor(IndexedColors.LIGHT_TURQUOISE.getIndex());
+        meta.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        meta.setAlignment(HorizontalAlignment.LEFT);
+        meta.setVerticalAlignment(VerticalAlignment.CENTER);
+        meta.setFont(bodyFont);
+        applyThinBorder(meta);
+        styles.put("meta", meta);
+
+        CellStyle header = workbook.createCellStyle();
+        header.setFillForegroundColor(IndexedColors.ROYAL_BLUE.getIndex());
+        header.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        header.setAlignment(HorizontalAlignment.CENTER);
+        header.setVerticalAlignment(VerticalAlignment.CENTER);
+        header.setFont(headerFont);
+        applyThinBorder(header);
+        styles.put("header", header);
+
+        CellStyle bodyTextOdd = workbook.createCellStyle();
+        bodyTextOdd.setFillForegroundColor(IndexedColors.LIGHT_CORNFLOWER_BLUE.getIndex());
+        bodyTextOdd.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        bodyTextOdd.setAlignment(HorizontalAlignment.LEFT);
+        bodyTextOdd.setVerticalAlignment(VerticalAlignment.CENTER);
+        bodyTextOdd.setFont(bodyFont);
+        applyThinBorder(bodyTextOdd);
+        styles.put("bodyTextOdd", bodyTextOdd);
+
+        CellStyle bodyTextEven = workbook.createCellStyle();
+        bodyTextEven.setFillForegroundColor(IndexedColors.WHITE.getIndex());
+        bodyTextEven.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        bodyTextEven.setAlignment(HorizontalAlignment.LEFT);
+        bodyTextEven.setVerticalAlignment(VerticalAlignment.CENTER);
+        bodyTextEven.setFont(bodyFont);
+        applyThinBorder(bodyTextEven);
+        styles.put("bodyTextEven", bodyTextEven);
+
+        CellStyle bodyNumberOdd = workbook.createCellStyle();
+        bodyNumberOdd.cloneStyleFrom(bodyTextOdd);
+        bodyNumberOdd.setAlignment(HorizontalAlignment.CENTER);
+        styles.put("bodyNumberOdd", bodyNumberOdd);
+
+        CellStyle bodyNumberEven = workbook.createCellStyle();
+        bodyNumberEven.cloneStyleFrom(bodyTextEven);
+        bodyNumberEven.setAlignment(HorizontalAlignment.CENTER);
+        styles.put("bodyNumberEven", bodyNumberEven);
+
+        return styles;
+    }
+
+    private void applyThinBorder(CellStyle style) {
+        style.setBorderTop(BorderStyle.THIN);
+        style.setBorderBottom(BorderStyle.THIN);
+        style.setBorderLeft(BorderStyle.THIN);
+        style.setBorderRight(BorderStyle.THIN);
+        style.setTopBorderColor(IndexedColors.GREY_40_PERCENT.getIndex());
+        style.setBottomBorderColor(IndexedColors.GREY_40_PERCENT.getIndex());
+        style.setLeftBorderColor(IndexedColors.GREY_40_PERCENT.getIndex());
+        style.setRightBorderColor(IndexedColors.GREY_40_PERCENT.getIndex());
+    }
+
+    private void createTextCell(Row row, int columnIndex, String value, CellStyle style) {
+        Cell cell = row.createCell(columnIndex);
+        if (value != null) {
+            cell.setCellValue(value);
+        } else {
+            cell.setCellValue("");
+        }
+        if (style != null) {
+            cell.setCellStyle(style);
+        }
+    }
+
+    private void createNumberCell(Row row, int columnIndex, Number value, CellStyle style) {
+        Cell cell = row.createCell(columnIndex);
+        if (value != null) {
+            cell.setCellValue(value.doubleValue());
+        } else {
+            cell.setCellValue(0);
+        }
+        if (style != null) {
+            cell.setCellStyle(style);
+        }
+    }
+
+    private String csvEscape(String text) {
+        if (text == null) {
+            return "";
+        }
+        if (!text.contains(",") && !text.contains("\"") && !text.contains("\n") && !text.contains("\r")) {
+            return text;
+        }
+        return "\"" + text.replace("\"", "\"\"") + "\"";
+    }
+
+    private String toNullableTrimmed(Object value) {
+        if (value == null) {
+            return null;
+        }
+        return trimText(String.valueOf(value));
+    }
+
+    private boolean containsIgnoreCase(String text, String keyword) {
+        if (!StringUtils.hasText(keyword)) {
+            return true;
+        }
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        return text.toLowerCase().contains(keyword.toLowerCase());
+    }
+
+    private List<ContestScoreCalcRow> queryContestScoreRows(Long contestId) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                """
+                        select
+                            cu.user_id as userId,
+                            ifnull(cu.ac_count, 0) as acCount,
+                            ifnull(cu.total_score, 0) as totalScore,
+                            u.username as username,
+                            u.real_name as realName,
+                            u.student_no as studentNo
+                        from contest_user cu
+                        inner join sys_user u on u.id = cu.user_id
+                        where cu.contest_id = ?
+                        """,
+                contestId
+        );
+        if (CollectionUtils.isEmpty(rows)) {
+            return List.of();
+        }
+
+        List<ContestScoreCalcRow> result = new ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            Long userId = toLong(row.get("userId"));
+            if (userId == null || userId <= 0) {
+                continue;
+            }
+            int acCount = (int) Math.max(0L, toLongValue(row.get("acCount")));
+            int totalScore = (int) Math.max(0L, toLongValue(row.get("totalScore")));
+            String username = toNullableTrimmed(row.get("username"));
+            String realName = toNullableTrimmed(row.get("realName"));
+            String studentNo = toNullableTrimmed(row.get("studentNo"));
+            result.add(new ContestScoreCalcRow(
+                    userId,
+                    username,
+                    realName,
+                    studentNo,
+                    acCount,
+                    totalScore
+            ));
+        }
+        return result;
+    }
+
+    private Map<Long, UserSubmissionStats> calcUserSubmissionStats(Long contestId, LocalDateTime contestStartTime) {
+        List<Map<String, Object>> submissionRows = jdbcTemplate.queryForList(
+                """
+                        select
+                            user_id as userId,
+                            problem_id as problemId,
+                            status as status,
+                            ifnull(score, 0) as score,
+                            submit_time as submitTime
+                        from submission
+                        where contest_id = ?
+                        order by user_id asc, problem_id asc, submit_time asc, id asc
+                        """,
+                contestId
+        );
+        if (CollectionUtils.isEmpty(submissionRows)) {
+            return Map.of();
+        }
+
+        Map<Long, Integer> submitCountMap = new HashMap<>();
+        Map<Long, Map<Long, ProblemPenaltyStats>> userProblemStatsMap = new HashMap<>();
+
+        for (Map<String, Object> row : submissionRows) {
+            Long userId = toLong(row.get("userId"));
+            Long problemId = toLong(row.get("problemId"));
+            if (userId == null || userId <= 0 || problemId == null || problemId <= 0) {
+                continue;
+            }
+            submitCountMap.merge(userId, 1, Integer::sum);
+
+            Map<Long, ProblemPenaltyStats> problemStatsMap = userProblemStatsMap.computeIfAbsent(userId, key -> new HashMap<>());
+            ProblemPenaltyStats problemStats = problemStatsMap.computeIfAbsent(problemId, key -> new ProblemPenaltyStats());
+            int score = (int) Math.max(0L, toLongValue(row.get("score")));
+            problemStats.maxScore = Math.max(problemStats.maxScore, score);
+
+            if (!problemStats.accepted) {
+                boolean accepted = "ACCEPTED".equalsIgnoreCase(String.valueOf(row.get("status")));
+                if (accepted) {
+                    problemStats.accepted = true;
+                    problemStats.firstAcceptedTime = toLocalDateTime(row.get("submitTime"));
+                } else {
+                    problemStats.wrongBeforeAccepted++;
+                }
+            }
+        }
+
+        Map<Long, UserSubmissionStats> result = new HashMap<>();
+        for (Map.Entry<Long, Map<Long, ProblemPenaltyStats>> entry : userProblemStatsMap.entrySet()) {
+            Long userId = entry.getKey();
+            int penaltyMinutes = 0;
+            for (ProblemPenaltyStats problemStats : entry.getValue().values()) {
+                if (problemStats == null || !problemStats.accepted) {
+                    continue;
+                }
+                int wrongPenalty = Math.max(0, problemStats.wrongBeforeAccepted) * 20;
+                int timePenalty = 0;
+                if (contestStartTime != null && problemStats.firstAcceptedTime != null) {
+                    long minutes = java.time.Duration.between(contestStartTime, problemStats.firstAcceptedTime).toMinutes();
+                    timePenalty = (int) Math.max(0, minutes);
+                }
+                penaltyMinutes += wrongPenalty + timePenalty;
+            }
+            result.put(userId, new UserSubmissionStats(
+                    submitCountMap.getOrDefault(userId, 0),
+                    Math.max(0, penaltyMinutes)
+            ));
+        }
+
+        submitCountMap.forEach((userId, submitCount) ->
+                result.putIfAbsent(userId, new UserSubmissionStats(Math.max(0, submitCount), 0)));
+        return result;
+    }
+
+    private LocalDateTime toLocalDateTime(Object value) {
+        if (value instanceof LocalDateTime localDateTime) {
+            return localDateTime;
+        }
+        if (value instanceof java.sql.Timestamp timestamp) {
+            return timestamp.toLocalDateTime();
+        }
+        return null;
+    }
+
+    private Page<ContestScoreVO> emptyContestScorePage(long current, long pageSize, long total) {
+        Page<ContestScoreVO> page = new Page<>(current, pageSize, total);
+        page.setRecords(List.of());
+        return page;
+    }
+
+    private List<ContestScoreVO> listContestScores(Long contestId, ContestScorePageQueryRequest queryRequest, String token) {
+        if (contestId == null || contestId <= 0) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "比赛ID不合法");
+        }
+
+        LoginUserVO loginUser = getLoginUser(token);
+        checkManagerRole(loginUser);
+
+        Contest contest = contestMapper.selectById(contestId);
+        if (contest == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "比赛不存在");
+        }
+
+        ContestScorePageQueryRequest safeQuery = queryRequest == null ? new ContestScorePageQueryRequest() : queryRequest;
+        String usernameKeyword = trimText(safeQuery.getUsernameKeyword());
+        String classKeyword = trimText(safeQuery.getClassKeyword());
+
+        List<ContestScoreCalcRow> baseRows = queryContestScoreRows(contestId);
+        if (CollectionUtils.isEmpty(baseRows)) {
+            return List.of();
+        }
+
+        Map<Long, UserSubmissionStats> submissionStatsMap = calcUserSubmissionStats(contestId, contest.getStartTime());
+        List<ContestScoreVO> fullList = new ArrayList<>(baseRows.size());
+        for (ContestScoreCalcRow row : baseRows) {
+            UserSubmissionStats submissionStats = submissionStatsMap.getOrDefault(row.userId(), UserSubmissionStats.EMPTY);
+
+            ContestScoreVO item = new ContestScoreVO();
+            item.setUserId(row.userId());
+            item.setUsername(row.username());
+            item.setRealName(row.realName());
+            item.setStudentNo(row.studentNo());
+            item.setAcCount(Math.max(0, row.acCount()));
+            item.setTotalScore(Math.max(0, row.totalScore()));
+            item.setPenaltyMinutes(Math.max(0, submissionStats.penaltyMinutes()));
+            item.setSubmitCount(Math.max(0, submissionStats.submitCount()));
+            fullList.add(item);
+        }
+
+        fullList.sort(Comparator
+                .comparing((ContestScoreVO item) -> safeInt(item.getAcCount()), Comparator.reverseOrder())
+                .thenComparing(item -> safeInt(item.getTotalScore()), Comparator.reverseOrder())
+                .thenComparing(item -> safeInt(item.getPenaltyMinutes()))
+                .thenComparing(item -> item.getUserId() == null ? Long.MAX_VALUE : item.getUserId()));
+        for (int i = 0; i < fullList.size(); i++) {
+            fullList.get(i).setRank((long) i + 1);
+        }
+
+        return fullList.stream()
+                .filter(item -> !StringUtils.hasText(usernameKeyword)
+                        || containsIgnoreCase(item.getUsername(), usernameKeyword)
+                        || containsIgnoreCase(item.getRealName(), usernameKeyword))
+                .filter(item -> !StringUtils.hasText(classKeyword)
+                        || containsIgnoreCase(item.getStudentNo(), classKeyword))
+                .toList();
+    }
+
     private String resolveStatusText(Contest contest) {
         Integer status = contest.getStatus();
         if (status == null) {
@@ -732,6 +1199,27 @@ public class ContestServiceImpl implements ContestService {
 
     private LoginUserVO getLoginUser(String token) {
         return authService.getLoginUser(token);
+    }
+
+    private record ContestScoreCalcRow(
+            Long userId,
+            String username,
+            String realName,
+            String studentNo,
+            int acCount,
+            int totalScore
+    ) {
+    }
+
+    private record UserSubmissionStats(int submitCount, int penaltyMinutes) {
+        private static final UserSubmissionStats EMPTY = new UserSubmissionStats(0, 0);
+    }
+
+    private static class ProblemPenaltyStats {
+        private int maxScore;
+        private boolean accepted;
+        private int wrongBeforeAccepted;
+        private LocalDateTime firstAcceptedTime;
     }
 
     private record ProblemSubmissionStat(long submitCount, long acceptCount) {
