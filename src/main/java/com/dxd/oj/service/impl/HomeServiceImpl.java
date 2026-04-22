@@ -4,10 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.dxd.oj.mapper.ContestMapper;
 import com.dxd.oj.mapper.ProblemMapper;
 import com.dxd.oj.mapper.SubmissionMapper;
+import com.dxd.oj.mapper.SysConfigMapper;
 import com.dxd.oj.mapper.SysUserMapper;
 import com.dxd.oj.model.entity.Contest;
 import com.dxd.oj.model.entity.Problem;
 import com.dxd.oj.model.entity.Submission;
+import com.dxd.oj.model.entity.SysConfig;
 import com.dxd.oj.model.entity.SysUser;
 import com.dxd.oj.model.vo.HomeOverviewVO;
 import com.dxd.oj.model.vo.HomeRecentContestVO;
@@ -18,6 +20,7 @@ import com.dxd.oj.service.HomeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -44,10 +47,15 @@ public class HomeServiceImpl implements HomeService {
     private static final String SUBMISSION_STATUS_WAITING = "WAITING";
     private static final String SUBMISSION_STATUS_JUDGING = "JUDGING";
     private static final String SUBMISSION_STATUS_ACCEPTED = "ACCEPTED";
+    private static final int DEFAULT_HOME_RECENT_CONTEST_LIMIT = 6;
+    private static final int DEFAULT_HOME_RECENT_SUBMISSION_LIMIT = 5;
+    private static final String CONFIG_HOME_RECENT_CONTEST_LIMIT = "home.recent_contest_limit";
+    private static final String CONFIG_HOME_RECENT_SUBMISSION_LIMIT = "home.recent_submission_limit";
 
     private final ProblemMapper problemMapper;
     private final SubmissionMapper submissionMapper;
     private final ContestMapper contestMapper;
+    private final SysConfigMapper sysConfigMapper;
     private final SysUserMapper sysUserMapper;
     private final AuthService authService;
 
@@ -92,12 +100,13 @@ public class HomeServiceImpl implements HomeService {
     }
 
     private List<HomeRecentContestVO> queryRecentContests(boolean manager) {
+        int contestLimit = resolvePositiveIntConfig(CONFIG_HOME_RECENT_CONTEST_LIMIT, DEFAULT_HOME_RECENT_CONTEST_LIMIT);
         LambdaQueryWrapper<Contest> wrapper = new LambdaQueryWrapper<>();
         if (!manager) {
             wrapper.in(Contest::getStatus, CONTEST_STATUS_PUBLISHED, CONTEST_STATUS_ENDED);
         }
         wrapper.orderByDesc(Contest::getStartTime, Contest::getId)
-                .last("limit 6");
+                .last("limit " + contestLimit);
         List<Contest> contestList = contestMapper.selectList(wrapper);
         if (CollectionUtils.isEmpty(contestList)) {
             return List.of();
@@ -119,9 +128,10 @@ public class HomeServiceImpl implements HomeService {
     }
 
     private List<HomeRecentSubmissionVO> queryRecentSubmissions() {
+        int submissionLimit = resolvePositiveIntConfig(CONFIG_HOME_RECENT_SUBMISSION_LIMIT, DEFAULT_HOME_RECENT_SUBMISSION_LIMIT);
         List<Submission> submissionList = submissionMapper.selectList(new LambdaQueryWrapper<Submission>()
                 .orderByDesc(Submission::getSubmitTime, Submission::getId)
-                .last("limit 5"));
+                .last("limit " + submissionLimit));
         if (CollectionUtils.isEmpty(submissionList)) {
             return List.of();
         }
@@ -205,5 +215,24 @@ public class HomeServiceImpl implements HomeService {
 
     private long safeLong(Long value) {
         return value == null ? 0L : Math.max(0L, value);
+    }
+
+    private int resolvePositiveIntConfig(String configKey, int defaultValue) {
+        if (!StringUtils.hasText(configKey) || defaultValue <= 0) {
+            return Math.max(defaultValue, 1);
+        }
+        SysConfig config = sysConfigMapper.selectOne(new LambdaQueryWrapper<SysConfig>()
+                .eq(SysConfig::getConfigKey, configKey)
+                .eq(SysConfig::getStatus, 1)
+                .last("limit 1"));
+        if (config == null || !StringUtils.hasText(config.getConfigValue())) {
+            return defaultValue;
+        }
+        try {
+            int parsed = Integer.parseInt(config.getConfigValue().trim());
+            return parsed > 0 ? parsed : defaultValue;
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
     }
 }

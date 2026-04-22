@@ -23,4 +23,7 @@ public class RunCodeRequest {
 
     @Schema(description = "运行超时时间（毫秒，可不传）", example = "3000")
     private Integer timeLimitMs;
+
+    @Schema(description = "运行内存限制（MB，可不传）", example = "256")
+    private Integer memoryLimitMb;
 }

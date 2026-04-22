@@ -389,6 +389,9 @@ public class SubmissionServiceImpl implements SubmissionService {
         if (problem.getTimeLimit() != null && problem.getTimeLimit() > 0) {
             runRequest.setTimeLimitMs(problem.getTimeLimit());
         }
+        if (problem.getMemoryLimit() != null && problem.getMemoryLimit() > 0) {
+            runRequest.setMemoryLimitMb(problem.getMemoryLimit());
+        }
 
         try {
             RunCodeResponse runResult = runService.runCode(runRequest, token);

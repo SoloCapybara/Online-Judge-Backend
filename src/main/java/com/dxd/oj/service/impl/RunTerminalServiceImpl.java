@@ -7,7 +7,10 @@ import com.dxd.oj.model.vo.RunCodeResponse;
 import com.dxd.oj.service.AuthService;
 import com.dxd.oj.service.RunTerminalEventSink;
 import com.dxd.oj.service.RunTerminalService;
+import com.dxd.oj.service.support.JudgeConcurrencyLimiter;
+import com.dxd.oj.service.support.SystemConfigAccessor;
 import jakarta.annotation.PreDestroy;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -32,6 +35,7 @@ import java.util.function.Consumer;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class RunTerminalServiceImpl implements RunTerminalService {
 
     private static final String STATUS_SUCCESS = "SUCCESS";
@@ -40,8 +44,15 @@ public class RunTerminalServiceImpl implements RunTerminalService {
     private static final String STATUS_TIMEOUT = "TIME_LIMIT_EXCEEDED";
     private static final String STATUS_UNSUPPORTED = "UNSUPPORTED_LANGUAGE";
     private static final String STATUS_SYSTEM_ERROR = "SYSTEM_ERROR";
+    private static final String CONFIG_JUDGE_DEFAULT_TIME_LIMIT_MS = "judge.default_time_limit_ms";
+    private static final String CONFIG_JUDGE_DEFAULT_MEMORY_LIMIT_MB = "judge.default_memory_limit_mb";
+    private static final int MIN_TIME_LIMIT_MS = 200;
+    private static final int MIN_MEMORY_LIMIT_MB = 16;
+    private static final int MAX_MEMORY_LIMIT_MB = 2048;
 
     private final AuthService authService;
+    private final SystemConfigAccessor systemConfigAccessor;
+    private final JudgeConcurrencyLimiter judgeConcurrencyLimiter;
     private final ConcurrentHashMap<String, ActiveRun> activeRuns = new ConcurrentHashMap<>();
     private final ExecutorService ioExecutor = Executors.newCachedThreadPool();
 
@@ -51,15 +62,14 @@ public class RunTerminalServiceImpl implements RunTerminalService {
     @Value("${oj.run.max-time-limit-ms:30000}")
     private int maxTimeLimitMs;
 
+    @Value("${oj.run.default-memory-limit-mb:256}")
+    private int defaultMemoryLimitMb;
+
     @Value("${oj.run.max-output-length:65536}")
     private int maxOutputLength;
 
     @Value("${oj.run.python-cmd:python3.14}")
     private String pythonCmd;
-
-    public RunTerminalServiceImpl(AuthService authService) {
-        this.authService = authService;
-    }
 
     @Override
     public void start(String sessionId, String token, RunCodeRequest request, RunTerminalEventSink eventSink) {
@@ -75,7 +85,20 @@ public class RunTerminalServiceImpl implements RunTerminalService {
 
         String language = request.getLanguage().trim().toUpperCase(Locale.ROOT);
         Integer requestedTimeLimit = request.getTimeLimitMs();
-        int timeLimit = resolveTimeLimit(requestedTimeLimit);
+        int configuredDefaultTimeLimitMs = systemConfigAccessor.getInt(
+                CONFIG_JUDGE_DEFAULT_TIME_LIMIT_MS,
+                defaultTimeLimitMs,
+                MIN_TIME_LIMIT_MS,
+                maxTimeLimitMs
+        );
+        int configuredDefaultMemoryLimitMb = systemConfigAccessor.getInt(
+                CONFIG_JUDGE_DEFAULT_MEMORY_LIMIT_MB,
+                defaultMemoryLimitMb,
+                MIN_MEMORY_LIMIT_MB,
+                MAX_MEMORY_LIMIT_MB
+        );
+        int timeLimit = resolveTimeLimit(requestedTimeLimit, configuredDefaultTimeLimitMs);
+        int memoryLimitMb = resolveMemoryLimit(request.getMemoryLimitMb(), configuredDefaultMemoryLimitMb);
         if (requestedTimeLimit != null && requestedTimeLimit > maxTimeLimitMs) {
             eventSink.onStatus("超时已按系统上限调整为 " + timeLimit + "ms");
         }
@@ -83,7 +106,9 @@ public class RunTerminalServiceImpl implements RunTerminalService {
         Path workDir = createWorkDir();
 
         ioExecutor.execute(() -> {
+            JudgeConcurrencyLimiter.Permit permit = null;
             try {
+                permit = judgeConcurrencyLimiter.acquirePermit();
                 writeSourceFile(workDir, language, request.getSourceCode());
                 long compileTimeMs = 0L;
 
@@ -123,23 +148,33 @@ public class RunTerminalServiceImpl implements RunTerminalService {
                 }
 
                 eventSink.onStatus("运行中...");
-                Process process = new ProcessBuilder(buildRunCommand(language))
+                Process process = new ProcessBuilder(buildRunCommand(language, memoryLimitMb))
                         .directory(workDir.toFile())
                         .redirectErrorStream(false)
                         .start();
 
                 ActiveRun run = new ActiveRun(
-                        sessionId, process, workDir, eventSink, maxOutputLength, compileTimeMs, totalStartNanos
+                        sessionId, process, workDir, eventSink, maxOutputLength, compileTimeMs, totalStartNanos, permit
                 );
+                permit = null;
                 ActiveRun previous = activeRuns.put(sessionId, run);
                 if (previous != null) {
                     previous.forceStop();
+                    previous.releasePermit();
                 }
                 run.startReaders(ioExecutor);
                 ioExecutor.execute(() -> waitForCompletion(run, timeLimit));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                deleteDirectoryQuietly(workDir);
+                eventSink.onError("获取执行槽位失败");
             } catch (Exception e) {
                 deleteDirectoryQuietly(workDir);
                 eventSink.onError(resolveErrorMessage(e));
+            } finally {
+                if (permit != null) {
+                    permit.close();
+                }
             }
         });
     }
@@ -167,12 +202,18 @@ public class RunTerminalServiceImpl implements RunTerminalService {
         ActiveRun run = activeRuns.remove(sessionId);
         if (run != null) {
             run.forceStop();
+            run.releasePermit();
+            deleteDirectoryQuietly(run.workDir);
         }
     }
 
     @PreDestroy
     public void destroy() {
-        activeRuns.forEach((id, run) -> run.forceStop());
+        activeRuns.forEach((id, run) -> {
+            run.forceStop();
+            run.releasePermit();
+            deleteDirectoryQuietly(run.workDir);
+        });
         activeRuns.clear();
         ioExecutor.shutdownNow();
     }
@@ -230,6 +271,7 @@ public class RunTerminalServiceImpl implements RunTerminalService {
     private void cleanupRun(String sessionId, ActiveRun run) {
         activeRuns.remove(sessionId, run);
         run.closeStdin();
+        run.releasePermit();
         deleteDirectoryQuietly(run.workDir);
     }
 
@@ -243,11 +285,18 @@ public class RunTerminalServiceImpl implements RunTerminalService {
         }
     }
 
-    private int resolveTimeLimit(Integer requestTimeLimit) {
+    private int resolveTimeLimit(Integer requestTimeLimit, int defaultLimitMs) {
         if (requestTimeLimit == null || requestTimeLimit <= 0) {
-            return defaultTimeLimitMs;
+            return defaultLimitMs;
         }
         return Math.min(requestTimeLimit, maxTimeLimitMs);
+    }
+
+    private int resolveMemoryLimit(Integer requestMemoryLimitMb, int defaultLimitMb) {
+        if (requestMemoryLimitMb == null || requestMemoryLimitMb <= 0) {
+            return defaultLimitMb;
+        }
+        return Math.min(Math.max(requestMemoryLimitMb, MIN_MEMORY_LIMIT_MB), MAX_MEMORY_LIMIT_MB);
     }
 
     private Path createWorkDir() {
@@ -287,9 +336,16 @@ public class RunTerminalServiceImpl implements RunTerminalService {
         };
     }
 
-    private String[] buildRunCommand(String language) {
+    private String[] buildRunCommand(String language, int memoryLimitMb) {
         return switch (language) {
-            case "JAVA17" -> new String[]{"java", "-cp", ".", "Main"};
+            case "JAVA17" -> new String[]{
+                    "java",
+                    "-Xms16m",
+                    "-Xmx" + memoryLimitMb + "m",
+                    "-cp",
+                    ".",
+                    "Main"
+            };
             case "PYTHON3142" -> new String[]{pythonCmd, "main.py"};
             case "C17", "CPP17" -> new String[]{"./main"};
             default -> new String[0];
@@ -426,10 +482,12 @@ public class RunTerminalServiceImpl implements RunTerminalService {
         private final OutputStream stdin;
         private final long compileTimeMs;
         private final long totalStartNanos;
+        private final JudgeConcurrencyLimiter.Permit permit;
         private final long executeStartNanos = System.nanoTime();
         private final AtomicBoolean hasStdinInput = new AtomicBoolean(false);
         private final AtomicBoolean stopped = new AtomicBoolean(false);
         private final AtomicBoolean inputClosed = new AtomicBoolean(false);
+        private final AtomicBoolean permitReleased = new AtomicBoolean(false);
         private volatile long timeoutBaseNanos = executeStartNanos;
         private volatile long lastInputNanos = executeStartNanos;
         private CompletableFuture<Void> stdoutTask;
@@ -442,7 +500,8 @@ public class RunTerminalServiceImpl implements RunTerminalService {
                 RunTerminalEventSink eventSink,
                 int maxOutputLength,
                 long compileTimeMs,
-                long totalStartNanos
+                long totalStartNanos,
+                JudgeConcurrencyLimiter.Permit permit
         ) {
             this.sessionId = sessionId;
             this.process = process;
@@ -453,6 +512,7 @@ public class RunTerminalServiceImpl implements RunTerminalService {
             this.stdin = process.getOutputStream();
             this.compileTimeMs = Math.max(0L, compileTimeMs);
             this.totalStartNanos = totalStartNanos;
+            this.permit = permit;
         }
 
         private void startReaders(ExecutorService executor) {
@@ -544,6 +604,12 @@ public class RunTerminalServiceImpl implements RunTerminalService {
             markStopped();
             process.destroyForcibly();
             awaitReaderTasks();
+        }
+
+        private void releasePermit() {
+            if (permit != null && permitReleased.compareAndSet(false, true)) {
+                permit.close();
+            }
         }
 
         private static void await(CompletableFuture<?> task) {

@@ -8,6 +8,8 @@ import com.dxd.oj.model.vo.RunCodeResponse;
 import com.dxd.oj.service.AuthService;
 import com.dxd.oj.service.RunService;
 import com.dxd.oj.service.RunStreamCallback;
+import com.dxd.oj.service.support.JudgeConcurrencyLimiter;
+import com.dxd.oj.service.support.SystemConfigAccessor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -37,14 +39,24 @@ public class RunServiceImpl implements RunService {
     private static final String STATUS_TIMEOUT = "TIME_LIMIT_EXCEEDED";
     private static final String STATUS_UNSUPPORTED = "UNSUPPORTED_LANGUAGE";
     private static final String STATUS_SYSTEM_ERROR = "SYSTEM_ERROR";
+    private static final String CONFIG_JUDGE_DEFAULT_TIME_LIMIT_MS = "judge.default_time_limit_ms";
+    private static final String CONFIG_JUDGE_DEFAULT_MEMORY_LIMIT_MB = "judge.default_memory_limit_mb";
+    private static final int MIN_TIME_LIMIT_MS = 200;
+    private static final int MAX_MEMORY_LIMIT_MB = 2048;
+    private static final int MIN_MEMORY_LIMIT_MB = 16;
 
     private final AuthService authService;
+    private final SystemConfigAccessor systemConfigAccessor;
+    private final JudgeConcurrencyLimiter judgeConcurrencyLimiter;
 
     @Value("${oj.run.default-time-limit-ms:15000}")
     private int defaultTimeLimitMs;
 
     @Value("${oj.run.max-time-limit-ms:30000}")
     private int maxTimeLimitMs;
+
+    @Value("${oj.run.default-memory-limit-mb:256}")
+    private int defaultMemoryLimitMb;
 
     @Value("${oj.run.max-output-length:65536}")
     private int maxOutputLength;
@@ -68,10 +80,25 @@ public class RunServiceImpl implements RunService {
 
         long totalStartNanos = System.nanoTime();
         String language = request.getLanguage().trim().toUpperCase(Locale.ROOT);
-        int timeLimit = resolveTimeLimit(request.getTimeLimitMs());
+        int configuredDefaultTimeLimitMs = systemConfigAccessor.getInt(
+                CONFIG_JUDGE_DEFAULT_TIME_LIMIT_MS,
+                defaultTimeLimitMs,
+                MIN_TIME_LIMIT_MS,
+                maxTimeLimitMs
+        );
+        int configuredDefaultMemoryLimitMb = systemConfigAccessor.getInt(
+                CONFIG_JUDGE_DEFAULT_MEMORY_LIMIT_MB,
+                defaultMemoryLimitMb,
+                MIN_MEMORY_LIMIT_MB,
+                MAX_MEMORY_LIMIT_MB
+        );
+        int timeLimit = resolveTimeLimit(request.getTimeLimitMs(), configuredDefaultTimeLimitMs);
+        int memoryLimitMb = resolveMemoryLimit(request.getMemoryLimitMb(), configuredDefaultMemoryLimitMb);
         long compileTimeMs = 0L;
         Path workDir = createWorkDir();
+        JudgeConcurrencyLimiter.Permit permit = null;
         try {
+            permit = judgeConcurrencyLimiter.acquirePermit();
             emitStatus(callback, "准备运行环境...");
             writeSourceFile(workDir, language, request.getSourceCode());
 
@@ -91,7 +118,13 @@ public class RunServiceImpl implements RunService {
             }
 
             emitStatus(callback, "运行中...");
-            RunCodeResponse runResult = runProcess(buildRunCommand(language), workDir, request.getInputData(), timeLimit, callback);
+            RunCodeResponse runResult = runProcess(
+                    buildRunCommand(language, memoryLimitMb),
+                    workDir,
+                    request.getInputData(),
+                    timeLimit,
+                    callback
+            );
             long executeTimeMs = safeMs(runResult.getTimeUsedMs());
             runResult.setCompileTimeMs(compileTimeMs);
             runResult.setExecuteTimeMs(executeTimeMs);
@@ -102,6 +135,9 @@ public class RunServiceImpl implements RunService {
                     runResult.getCompileTimeMs(), runResult.getExecuteTimeMs(), runResult.getTotalTimeMs());
             emitStatus(callback, "运行完成");
             return runResult;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "获取执行槽位失败");
         } catch (BusinessException e) {
             emitStatus(callback, e.getMessage());
             throw e;
@@ -119,6 +155,9 @@ public class RunServiceImpl implements RunService {
             emitStderr(callback, StringUtils.hasText(e.getMessage()) ? e.getMessage() : "系统异常");
             return response;
         } finally {
+            if (permit != null) {
+                permit.close();
+            }
             deleteDirectoryQuietly(workDir);
         }
     }
@@ -133,11 +172,18 @@ public class RunServiceImpl implements RunService {
         }
     }
 
-    private int resolveTimeLimit(Integer requestTimeLimit) {
+    private int resolveTimeLimit(Integer requestTimeLimit, int defaultLimitMs) {
         if (requestTimeLimit == null || requestTimeLimit <= 0) {
-            return defaultTimeLimitMs;
+            return defaultLimitMs;
         }
         return Math.min(requestTimeLimit, maxTimeLimitMs);
+    }
+
+    private int resolveMemoryLimit(Integer requestMemoryLimitMb, int defaultLimitMb) {
+        if (requestMemoryLimitMb == null || requestMemoryLimitMb <= 0) {
+            return defaultLimitMb;
+        }
+        return Math.min(Math.max(requestMemoryLimitMb, MIN_MEMORY_LIMIT_MB), MAX_MEMORY_LIMIT_MB);
     }
 
     private Path createWorkDir() {
@@ -177,9 +223,16 @@ public class RunServiceImpl implements RunService {
         };
     }
 
-    private String[] buildRunCommand(String language) {
+    private String[] buildRunCommand(String language, int memoryLimitMb) {
         return switch (language) {
-            case "JAVA17" -> new String[]{"java", "-cp", ".", "Main"};
+            case "JAVA17" -> new String[]{
+                    "java",
+                    "-Xms16m",
+                    "-Xmx" + memoryLimitMb + "m",
+                    "-cp",
+                    ".",
+                    "Main"
+            };
             case "PYTHON3142" -> new String[]{pythonCmd, "main.py"};
             case "C17", "CPP17" -> new String[]{"./main"};
             default -> new String[0];

@@ -5,6 +5,7 @@ import com.dxd.oj.common.ErrorCode;
 import com.dxd.oj.common.JwtUtils;
 import com.dxd.oj.exception.BusinessException;
 import com.dxd.oj.mapper.LoginLogMapper;
+import com.dxd.oj.mapper.SysConfigMapper;
 import com.dxd.oj.mapper.SysRoleMapper;
 import com.dxd.oj.mapper.SysUserMapper;
 import com.dxd.oj.mapper.SysUserRoleMapper;
@@ -12,6 +13,7 @@ import com.dxd.oj.model.dto.auth.UserLoginRequest;
 import com.dxd.oj.model.dto.auth.UserRegisterRequest;
 import com.dxd.oj.model.entity.LoginLog;
 import com.dxd.oj.model.entity.SysRole;
+import com.dxd.oj.model.entity.SysConfig;
 import com.dxd.oj.model.entity.SysUser;
 import com.dxd.oj.model.entity.SysUserRole;
 import com.dxd.oj.model.vo.LoginUserVO;
@@ -44,8 +46,10 @@ public class AuthServiceImpl implements AuthService {
     private static final String SUPER_ADMIN_USERNAME = "admin";
     private static final String DEFAULT_ROLE_CODE = "STUDENT";
     private static final String LOGIN_TYPE_PASSWORD = "PASSWORD";
+    private static final String CONFIG_USER_REGISTER_ENABLED = "user.register_enabled";
 
     private final SysUserMapper sysUserMapper;
+    private final SysConfigMapper sysConfigMapper;
     private final SysRoleMapper sysRoleMapper;
     private final SysUserRoleMapper sysUserRoleMapper;
     private final LoginLogMapper loginLogMapper;
@@ -187,6 +191,9 @@ public class AuthServiceImpl implements AuthService {
         if (request == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "请求参数不能为空");
         }
+        if (!isRegisterEnabled()) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "当前已关闭用户注册");
+        }
 
         if (!StringUtils.hasText(request.getUsername())
                 || !StringUtils.hasText(request.getPassword())
@@ -215,6 +222,18 @@ public class AuthServiceImpl implements AuthService {
         if (request.getRealName().trim().length() > 50) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "真实姓名长度不能超过50位");
         }
+    }
+
+    private boolean isRegisterEnabled() {
+        SysConfig config = sysConfigMapper.selectOne(new LambdaQueryWrapper<SysConfig>()
+                .eq(SysConfig::getConfigKey, CONFIG_USER_REGISTER_ENABLED)
+                .eq(SysConfig::getStatus, 1)
+                .last("limit 1"));
+        if (config == null || !StringUtils.hasText(config.getConfigValue())) {
+            return true;
+        }
+        String value = config.getConfigValue().trim();
+        return !"false".equalsIgnoreCase(value) && !"0".equals(value);
     }
 
     private Claims parseAndCheckToken(String token) {
