@@ -213,6 +213,52 @@ SET @p110 := (SELECT id FROM problem WHERE title = '课程表' LIMIT 1);
 SET @p111 := (SELECT id FROM problem WHERE title = '全排列' LIMIT 1);
 SET @p112 := (SELECT id FROM problem WHERE title = '买卖股票的最佳时机' LIMIT 1);
 
+-- 标签数据
+INSERT INTO problem_tag (id, tag_name)
+VALUES
+    (900000000000300001, '数组'),
+    (900000000000300002, '哈希表'),
+    (900000000000300003, '字符串'),
+    (900000000000300004, '栈'),
+    (900000000000300005, '二分'),
+    (900000000000300006, '双指针'),
+    (900000000000300007, '动态规划'),
+    (900000000000300008, '图论'),
+    (900000000000300009, '回溯'),
+    (900000000000300010, '贪心')
+ON DUPLICATE KEY UPDATE tag_name = VALUES(tag_name);
+
+SET @tag_array := (SELECT id FROM problem_tag WHERE tag_name = '数组' LIMIT 1);
+SET @tag_hash := (SELECT id FROM problem_tag WHERE tag_name = '哈希表' LIMIT 1);
+SET @tag_string := (SELECT id FROM problem_tag WHERE tag_name = '字符串' LIMIT 1);
+SET @tag_stack := (SELECT id FROM problem_tag WHERE tag_name = '栈' LIMIT 1);
+SET @tag_binary := (SELECT id FROM problem_tag WHERE tag_name = '二分' LIMIT 1);
+SET @tag_pointer := (SELECT id FROM problem_tag WHERE tag_name = '双指针' LIMIT 1);
+SET @tag_dp := (SELECT id FROM problem_tag WHERE tag_name = '动态规划' LIMIT 1);
+SET @tag_graph := (SELECT id FROM problem_tag WHERE tag_name = '图论' LIMIT 1);
+SET @tag_backtrack := (SELECT id FROM problem_tag WHERE tag_name = '回溯' LIMIT 1);
+SET @tag_greedy := (SELECT id FROM problem_tag WHERE tag_name = '贪心' LIMIT 1);
+
+INSERT IGNORE INTO problem_tag_rel (id, problem_id, tag_id)
+SELECT 900000000000310001, @p101, @tag_array FROM dual WHERE @p101 IS NOT NULL AND @tag_array IS NOT NULL
+UNION ALL SELECT 900000000000310002, @p101, @tag_hash FROM dual WHERE @p101 IS NOT NULL AND @tag_hash IS NOT NULL
+UNION ALL SELECT 900000000000310003, @p102, @tag_string FROM dual WHERE @p102 IS NOT NULL AND @tag_string IS NOT NULL
+UNION ALL SELECT 900000000000310004, @p102, @tag_stack FROM dual WHERE @p102 IS NOT NULL AND @tag_stack IS NOT NULL
+UNION ALL SELECT 900000000000310005, @p103, @tag_binary FROM dual WHERE @p103 IS NOT NULL AND @tag_binary IS NOT NULL
+UNION ALL SELECT 900000000000310006, @p104, @tag_pointer FROM dual WHERE @p104 IS NOT NULL AND @tag_pointer IS NOT NULL
+UNION ALL SELECT 900000000000310007, @p104, @tag_array FROM dual WHERE @p104 IS NOT NULL AND @tag_array IS NOT NULL
+UNION ALL SELECT 900000000000310008, @p105, @tag_pointer FROM dual WHERE @p105 IS NOT NULL AND @tag_pointer IS NOT NULL
+UNION ALL SELECT 900000000000310009, @p105, @tag_array FROM dual WHERE @p105 IS NOT NULL AND @tag_array IS NOT NULL
+UNION ALL SELECT 900000000000310010, @p106, @tag_pointer FROM dual WHERE @p106 IS NOT NULL AND @tag_pointer IS NOT NULL
+UNION ALL SELECT 900000000000310011, @p106, @tag_array FROM dual WHERE @p106 IS NOT NULL AND @tag_array IS NOT NULL
+UNION ALL SELECT 900000000000310012, @p107, @tag_dp FROM dual WHERE @p107 IS NOT NULL AND @tag_dp IS NOT NULL
+UNION ALL SELECT 900000000000310013, @p108, @tag_dp FROM dual WHERE @p108 IS NOT NULL AND @tag_dp IS NOT NULL
+UNION ALL SELECT 900000000000310014, @p109, @tag_graph FROM dual WHERE @p109 IS NOT NULL AND @tag_graph IS NOT NULL
+UNION ALL SELECT 900000000000310015, @p110, @tag_graph FROM dual WHERE @p110 IS NOT NULL AND @tag_graph IS NOT NULL
+UNION ALL SELECT 900000000000310016, @p111, @tag_backtrack FROM dual WHERE @p111 IS NOT NULL AND @tag_backtrack IS NOT NULL
+UNION ALL SELECT 900000000000310017, @p112, @tag_greedy FROM dual WHERE @p112 IS NOT NULL AND @tag_greedy IS NOT NULL
+UNION ALL SELECT 900000000000310018, @p112, @tag_array FROM dual WHERE @p112 IS NOT NULL AND @tag_array IS NOT NULL;
+
 -- 1
 INSERT INTO problem_case (id, problem_id, case_no, input_data, output_data, score, is_sample)
 SELECT 900000000000210001, @p101, 1, '4 9\n2 7 11 15', '0 1', 0, 1 FROM dual WHERE @p101 IS NOT NULL

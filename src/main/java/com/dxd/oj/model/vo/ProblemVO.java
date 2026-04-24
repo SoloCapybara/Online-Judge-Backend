@@ -5,6 +5,7 @@ import lombok.Data;
 
 import java.io.Serializable;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @Schema(description = "题目信息")
@@ -21,6 +22,12 @@ public class ProblemVO implements Serializable {
 
     @Schema(description = "分类名称")
     private String categoryName;
+
+    @Schema(description = "题目标签列表")
+    private List<ProblemTagVO> tagList;
+
+    @Schema(description = "题目标签名称列表")
+    private List<String> tagNames;
 
     @Schema(description = "题目描述")
     private String content;

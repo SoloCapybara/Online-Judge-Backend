@@ -24,7 +24,9 @@ import com.dxd.oj.model.entity.ProblemCase;
 import com.dxd.oj.model.entity.Submission;
 import com.dxd.oj.model.entity.SubmissionCase;
 import com.dxd.oj.model.entity.SysUser;
+import com.dxd.oj.model.vo.JudgeDailyStatsVO;
 import com.dxd.oj.model.vo.JudgeOverviewVO;
+import com.dxd.oj.model.vo.JudgeSystemMetricsVO;
 import com.dxd.oj.model.vo.LoginUserVO;
 import com.dxd.oj.model.vo.RunCodeResponse;
 import com.dxd.oj.model.vo.SubmissionCaseVO;
@@ -43,7 +45,17 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
+import java.io.File;
+import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.RuntimeMXBean;
+import com.sun.management.OperatingSystemMXBean;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
+import java.sql.Date;
 import java.util.*;
 import java.util.regex.Pattern;
 
@@ -90,6 +102,10 @@ public class SubmissionServiceImpl implements SubmissionService {
     private final JdbcTemplate jdbcTemplate;
 
     private static final int MAX_SOURCE_CODE_LENGTH = 200000;
+    private static final int DEFAULT_DAILY_STATS_DAYS = 7;
+    private static final int MIN_DAILY_STATS_DAYS = 1;
+    private static final int MAX_DAILY_STATS_DAYS = 30;
+    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -276,6 +292,97 @@ public class SubmissionServiceImpl implements SubmissionService {
             overview.setServiceStatus("NORMAL");
         }
         return overview;
+    }
+
+    @Override
+    public List<JudgeDailyStatsVO> getJudgeDailyStats(Integer days) {
+        int safeDays = normalizeDailyStatsDays(days);
+        LocalDate endExclusive = LocalDate.now().plusDays(1);
+        LocalDate startInclusive = endExclusive.minusDays(safeDays);
+        LocalDateTime startTime = startInclusive.atStartOfDay();
+        LocalDateTime endTime = endExclusive.atStartOfDay();
+
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                """
+                        select
+                            date(submit_time) as statDate,
+                            count(1) as submitCount,
+                            sum(case when status = 'ACCEPTED' then 1 else 0 end) as acceptedCount
+                        from submission
+                        where submit_time >= ? and submit_time < ?
+                        group by date(submit_time)
+                        order by statDate asc
+                        """,
+                startTime,
+                endTime
+        );
+
+        Map<LocalDate, DayAgg> dayAggMap = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            LocalDate statDate = toLocalDate(row.get("statDate"));
+            if (statDate == null) {
+                continue;
+            }
+            long submitCount = toLongValue(row.get("submitCount"));
+            long acceptedCount = toLongValue(row.get("acceptedCount"));
+            dayAggMap.put(statDate, new DayAgg(submitCount, acceptedCount));
+        }
+
+        List<JudgeDailyStatsVO> result = new ArrayList<>(safeDays);
+        for (int i = 0; i < safeDays; i++) {
+            LocalDate day = startInclusive.plusDays(i);
+            DayAgg agg = dayAggMap.getOrDefault(day, DayAgg.EMPTY);
+            JudgeDailyStatsVO item = new JudgeDailyStatsVO();
+            item.setStatDate(day.toString());
+            item.setSubmitCount(agg.submitCount());
+            item.setAcceptedCount(agg.acceptedCount());
+            item.setAcRate(calcRate(agg.submitCount(), agg.acceptedCount()));
+            result.add(item);
+        }
+        return result;
+    }
+
+    @Override
+    public JudgeSystemMetricsVO getJudgeSystemMetrics() {
+        Runtime runtime = Runtime.getRuntime();
+        RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
+        java.lang.management.OperatingSystemMXBean rawBean = ManagementFactory.getOperatingSystemMXBean();
+        OperatingSystemMXBean osBean = rawBean instanceof OperatingSystemMXBean ? (OperatingSystemMXBean) rawBean : null;
+        File root = File.listRoots() != null && File.listRoots().length > 0 ? File.listRoots()[0] : new File("/");
+
+        long jvmHeapTotal = Math.max(0L, runtime.totalMemory());
+        long jvmHeapFree = Math.max(0L, runtime.freeMemory());
+        long jvmHeapUsed = Math.max(0L, jvmHeapTotal - jvmHeapFree);
+
+        long systemMemoryTotal = osBean == null ? 0L : Math.max(0L, osBean.getTotalMemorySize());
+        long systemMemoryFree = osBean == null ? 0L : Math.max(0L, osBean.getFreeMemorySize());
+        double systemCpuUsage = osBean == null ? 0D : normalizePercent(osBean.getCpuLoad());
+        double processCpuUsage = osBean == null ? 0D : normalizePercent(osBean.getProcessCpuLoad());
+        double loadAverage = normalizeLoadAverage(rawBean.getSystemLoadAverage());
+
+        long diskTotal = Math.max(0L, root.getTotalSpace());
+        long diskUsable = Math.max(0L, root.getUsableSpace());
+        long uptime = Math.max(0L, runtimeMXBean.getUptime());
+        ContainerProbeResult containerProbe = detectContainerEnvironment();
+
+        JudgeSystemMetricsVO metrics = new JudgeSystemMetricsVO();
+        metrics.setOsName(System.getProperty("os.name", "unknown"));
+        metrics.setOsArch(System.getProperty("os.arch", "unknown"));
+        metrics.setSystemCpuUsage(systemCpuUsage);
+        metrics.setProcessCpuUsage(processCpuUsage);
+        metrics.setSystemLoadAverage(loadAverage);
+        metrics.setSystemMemoryTotal(systemMemoryTotal);
+        metrics.setSystemMemoryFree(systemMemoryFree);
+        metrics.setJvmHeapTotal(jvmHeapTotal);
+        metrics.setJvmHeapUsed(jvmHeapUsed);
+        metrics.setDiskTotal(diskTotal);
+        metrics.setDiskUsable(diskUsable);
+        metrics.setProcessUptimeMs(uptime);
+        metrics.setContainerized(containerProbe.containerized());
+        metrics.setRuntimeEnvironment(containerProbe.containerized() ? "CONTAINER" : "HOST");
+        metrics.setContainerHint(containerProbe.hint());
+        metrics.setCollectedAt(LocalDateTime.now().format(DATE_TIME_FORMATTER));
+        return metrics;
     }
 
     private JudgeSummary doJudge(Submission submission, Problem problem, List<ProblemCase> cases, String token) {
@@ -728,6 +835,104 @@ public class SubmissionServiceImpl implements SubmissionService {
         }
     }
 
+    private int normalizeDailyStatsDays(Integer days) {
+        if (days == null) {
+            return DEFAULT_DAILY_STATS_DAYS;
+        }
+        if (days < MIN_DAILY_STATS_DAYS) {
+            return MIN_DAILY_STATS_DAYS;
+        }
+        if (days > MAX_DAILY_STATS_DAYS) {
+            return MAX_DAILY_STATS_DAYS;
+        }
+        return days;
+    }
+
+    private LocalDate toLocalDate(Object value) {
+        if (value instanceof LocalDate date) {
+            return date;
+        }
+        if (value instanceof Date sqlDate) {
+            return sqlDate.toLocalDate();
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(String.valueOf(value));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private long toLongValue(Object value) {
+        if (value instanceof Number number) {
+            return Math.max(0L, number.longValue());
+        }
+        if (value == null) {
+            return 0L;
+        }
+        try {
+            return Math.max(0L, Long.parseLong(String.valueOf(value)));
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
+    private double calcRate(long total, long accepted) {
+        if (total <= 0L) {
+            return 0D;
+        }
+        double rate = accepted * 100D / total;
+        return Math.round(rate * 10D) / 10D;
+    }
+
+    private double normalizePercent(double value) {
+        if (Double.isNaN(value) || value < 0D) {
+            return 0D;
+        }
+        double percent = value * 100D;
+        if (percent > 100D) {
+            percent = 100D;
+        }
+        return Math.round(percent * 10D) / 10D;
+    }
+
+    private double normalizeLoadAverage(double value) {
+        if (Double.isNaN(value) || value < 0D) {
+            return 0D;
+        }
+        return Math.round(value * 100D) / 100D;
+    }
+
+    private ContainerProbeResult detectContainerEnvironment() {
+        boolean dockerenvExists = Files.exists(Path.of("/.dockerenv"));
+        String cgroupText = readCgroupText();
+        String lower = cgroupText.toLowerCase(Locale.ROOT);
+        String hint = null;
+        if (lower.contains("kubepods")) {
+            hint = "kubepods";
+        } else if (lower.contains("containerd")) {
+            hint = "containerd";
+        } else if (lower.contains("docker")) {
+            hint = "docker";
+        }
+        boolean containerized = dockerenvExists || StringUtils.hasText(hint);
+        return new ContainerProbeResult(containerized, hint);
+    }
+
+    private String readCgroupText() {
+        Path cgroupPath = Path.of("/proc/1/cgroup");
+        if (!Files.exists(cgroupPath)) {
+            return "";
+        }
+        try {
+            return Files.readString(cgroupPath);
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
     private String normalizeLanguage(String language) {
         return language.trim().toUpperCase(Locale.ROOT);
     }
@@ -799,5 +1004,12 @@ public class SubmissionServiceImpl implements SubmissionService {
     }
 
     private record JudgeSummary(String finalStatus) {
+    }
+
+    private record DayAgg(long submitCount, long acceptedCount) {
+        private static final DayAgg EMPTY = new DayAgg(0L, 0L);
+    }
+
+    private record ContainerProbeResult(boolean containerized, String hint) {
     }
 }

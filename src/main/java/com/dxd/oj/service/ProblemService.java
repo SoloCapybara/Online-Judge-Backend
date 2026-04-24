@@ -5,6 +5,7 @@ import com.dxd.oj.model.dto.problem.ProblemCreateRequest;
 import com.dxd.oj.model.dto.problem.ProblemPageQueryRequest;
 import com.dxd.oj.model.dto.problem.ProblemUpdateRequest;
 import com.dxd.oj.model.vo.ProblemCaseVO;
+import com.dxd.oj.model.vo.ProblemTagVO;
 import com.dxd.oj.model.vo.ProblemVO;
 
 import java.util.List;
@@ -22,4 +23,6 @@ public interface ProblemService {
     boolean deleteProblem(Long problemId, String token);
 
     List<ProblemCaseVO> listProblemCases(Long problemId, String token);
+
+    List<ProblemTagVO> listProblemTags();
 }

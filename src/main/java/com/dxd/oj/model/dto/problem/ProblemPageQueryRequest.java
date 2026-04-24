@@ -19,6 +19,9 @@ public class ProblemPageQueryRequest {
     @Schema(description = "分类ID", example = "10001")
     private Long categoryId;
 
+    @Schema(description = "标签ID", example = "10001")
+    private Long tagId;
+
     @Schema(description = "难度：1=简单，2=中等，3=困难", example = "2")
     private Integer difficulty;
 

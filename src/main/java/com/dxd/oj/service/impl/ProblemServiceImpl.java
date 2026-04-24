@@ -2,6 +2,7 @@ package com.dxd.oj.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.dxd.oj.common.ErrorCode;
 import com.dxd.oj.exception.BusinessException;
@@ -19,11 +20,13 @@ import com.dxd.oj.model.entity.ProblemCategory;
 import com.dxd.oj.model.entity.SysUser;
 import com.dxd.oj.model.vo.LoginUserVO;
 import com.dxd.oj.model.vo.ProblemCaseVO;
+import com.dxd.oj.model.vo.ProblemTagVO;
 import com.dxd.oj.model.vo.ProblemVO;
 import com.dxd.oj.service.AuthService;
 import com.dxd.oj.service.ProblemService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -48,6 +52,8 @@ public class ProblemServiceImpl implements ProblemService {
 
     private static final String ROLE_ADMIN = "ADMIN";
     private static final String ROLE_TEACHER = "TEACHER";
+    private static final int MAX_TAG_COUNT = 10;
+    private static final int MAX_TAG_NAME_LENGTH = 50;
 
     private final ProblemMapper problemMapper;
     private final ProblemCaseMapper problemCaseMapper;
@@ -68,7 +74,10 @@ public class ProblemServiceImpl implements ProblemService {
         LambdaQueryWrapper<Problem> wrapper = new LambdaQueryWrapper<>();
         wrapper.like(StringUtils.hasText(title), Problem::getTitle, title)
                 .eq(safeQuery.getCategoryId() != null, Problem::getCategoryId, safeQuery.getCategoryId())
-                .eq(safeQuery.getDifficulty() != null, Problem::getDifficulty, safeQuery.getDifficulty());
+                .eq(safeQuery.getDifficulty() != null, Problem::getDifficulty, safeQuery.getDifficulty())
+                .inSql(safeQuery.getTagId() != null && safeQuery.getTagId() > 0,
+                        Problem::getId,
+                        "select problem_id from problem_tag_rel where tag_id = " + safeQuery.getTagId());
 
         if (manager) {
             wrapper.eq(safeQuery.getStatus() != null, Problem::getStatus, safeQuery.getStatus());
@@ -135,6 +144,7 @@ public class ProblemServiceImpl implements ProblemService {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "创建题目失败");
         }
         replaceCases(problem.getId(), request.getCaseList());
+        replaceTags(problem.getId(), request.getTagNames());
         log.info("题库-创建题目成功：problemId={}, operator={}", problem.getId(), loginUser.getUsername());
         return problem.getId();
     }
@@ -175,6 +185,7 @@ public class ProblemServiceImpl implements ProblemService {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "更新题目失败");
         }
         replaceCases(problemId, request.getCaseList());
+        replaceTags(problemId, request.getTagNames());
         log.info("题库-更新题目成功：problemId={}, operator={}", problemId, loginUser.getUsername());
         return true;
     }
@@ -250,6 +261,14 @@ public class ProblemServiceImpl implements ProblemService {
         return cases.stream().map(this::toProblemCaseVO).toList();
     }
 
+    @Override
+    public List<ProblemTagVO> listProblemTags() {
+        return jdbcTemplate.query(
+                "select id, tag_name from problem_tag order by tag_name asc",
+                (rs, rowNum) -> toProblemTagVO(rs.getLong("id"), rs.getString("tag_name"))
+        );
+    }
+
     private void replaceCases(Long problemId, List<ProblemCaseDTO> caseList) {
         problemCaseMapper.delete(new LambdaQueryWrapper<ProblemCase>().eq(ProblemCase::getProblemId, problemId));
         if (CollectionUtils.isEmpty(caseList)) {
@@ -271,6 +290,81 @@ public class ProblemServiceImpl implements ProblemService {
             problemCaseMapper.insert(problemCase);
             index++;
         }
+    }
+
+    private void replaceTags(Long problemId, List<String> tagNames) {
+        jdbcTemplate.update("delete from problem_tag_rel where problem_id = ?", problemId);
+        List<String> normalizedNames = normalizeTagNames(tagNames);
+        if (normalizedNames.isEmpty()) {
+            return;
+        }
+
+        Map<String, Long> tagIdMap = findTagIdMap(normalizedNames);
+        for (String tagName : normalizedNames) {
+            if (!tagIdMap.containsKey(tagName)) {
+                try {
+                    jdbcTemplate.update(
+                            "insert into problem_tag (id, tag_name) values (?, ?)",
+                            IdWorker.getId(),
+                            tagName
+                    );
+                } catch (DuplicateKeyException ignored) {
+                    // Another request may have created the same tag; re-query below.
+                }
+            }
+        }
+
+        tagIdMap = findTagIdMap(normalizedNames);
+        for (String tagName : normalizedNames) {
+            Long tagId = tagIdMap.get(tagName);
+            if (tagId == null) {
+                continue;
+            }
+            jdbcTemplate.update(
+                    "insert ignore into problem_tag_rel (id, problem_id, tag_id) values (?, ?, ?)",
+                    IdWorker.getId(),
+                    problemId,
+                    tagId
+            );
+        }
+    }
+
+    private List<String> normalizeTagNames(List<String> tagNames) {
+        if (CollectionUtils.isEmpty(tagNames)) {
+            return List.of();
+        }
+        List<String> names = tagNames.stream()
+                .map(this::trimText)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList();
+        if (names.size() > MAX_TAG_COUNT) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "题目标签最多10个");
+        }
+        for (String name : names) {
+            if (name.length() > MAX_TAG_NAME_LENGTH) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "标签名称长度不能超过50位");
+            }
+        }
+        return names;
+    }
+
+    private Map<String, Long> findTagIdMap(List<String> tagNames) {
+        if (CollectionUtils.isEmpty(tagNames)) {
+            return Map.of();
+        }
+        String placeholders = tagNames.stream().map(item -> "?").collect(Collectors.joining(","));
+        return jdbcTemplate.query(
+                "select id, tag_name from problem_tag where tag_name in (" + placeholders + ")",
+                rs -> {
+                    Map<String, Long> result = new java.util.LinkedHashMap<>();
+                    while (rs.next()) {
+                        result.put(rs.getString("tag_name"), rs.getLong("id"));
+                    }
+                    return result;
+                },
+                tagNames.toArray()
+        );
     }
 
     private void validateJudgeMode(String judgeMode) {
@@ -401,6 +495,48 @@ public class ProblemServiceImpl implements ProblemService {
                 }
             }
         }
+        fillProblemTags(problemList);
+    }
+
+    private void fillProblemTags(List<ProblemVO> problemList) {
+        List<Long> problemIds = problemList.stream()
+                .map(ProblemVO::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (problemIds.isEmpty()) {
+            return;
+        }
+
+        String placeholders = problemIds.stream().map(item -> "?").collect(Collectors.joining(","));
+        Map<Long, List<ProblemTagVO>> tagMap = jdbcTemplate.query(
+                "select r.problem_id, t.id, t.tag_name " +
+                        "from problem_tag_rel r join problem_tag t on t.id = r.tag_id " +
+                        "where r.problem_id in (" + placeholders + ") order by t.tag_name asc",
+                rs -> {
+                    Map<Long, List<ProblemTagVO>> result = new java.util.LinkedHashMap<>();
+                    while (rs.next()) {
+                        Long problemId = rs.getLong("problem_id");
+                        result.computeIfAbsent(problemId, key -> new ArrayList<>())
+                                .add(toProblemTagVO(rs.getLong("id"), rs.getString("tag_name")));
+                    }
+                    return result;
+                },
+                problemIds.toArray()
+        );
+
+        for (ProblemVO problemVO : problemList) {
+            List<ProblemTagVO> tags = tagMap.getOrDefault(problemVO.getId(), List.of());
+            problemVO.setTagList(tags);
+            problemVO.setTagNames(tags.stream().map(ProblemTagVO::getTagName).toList());
+        }
+    }
+
+    private ProblemTagVO toProblemTagVO(Long id, String tagName) {
+        ProblemTagVO vo = new ProblemTagVO();
+        vo.setId(id);
+        vo.setTagName(tagName);
+        return vo;
     }
 
     private ProblemCaseVO toProblemCaseVO(ProblemCase problemCase) {

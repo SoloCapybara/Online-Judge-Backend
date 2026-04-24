@@ -3,7 +3,9 @@ package com.dxd.oj.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dxd.oj.model.dto.submission.SubmissionCreateRequest;
 import com.dxd.oj.model.dto.submission.SubmissionPageQueryRequest;
+import com.dxd.oj.model.vo.JudgeDailyStatsVO;
 import com.dxd.oj.model.vo.JudgeOverviewVO;
+import com.dxd.oj.model.vo.JudgeSystemMetricsVO;
 import com.dxd.oj.model.vo.SubmissionCaseVO;
 import com.dxd.oj.model.vo.SubmissionCreateVO;
 import com.dxd.oj.model.vo.SubmissionDetailVO;
@@ -24,4 +26,8 @@ public interface SubmissionService {
     boolean rejudgeSubmission(Long submissionId, String token);
 
     JudgeOverviewVO getJudgeOverview();
+
+    List<JudgeDailyStatsVO> getJudgeDailyStats(Integer days);
+
+    JudgeSystemMetricsVO getJudgeSystemMetrics();
 }

@@ -23,6 +23,10 @@ public class ProblemUpdateRequest {
     @Schema(description = "分类ID", example = "10001")
     private Long categoryId;
 
+    @Schema(description = "题目标签名称列表", example = "[\"数组\",\"哈希表\"]")
+    @Size(max = 10, message = "题目标签最多10个")
+    private List<@Size(max = 50, message = "标签名称长度不能超过50位") String> tagNames;
+
     @Schema(description = "题目描述（支持Markdown）", example = "给定两个整数 a 和 b，输出它们的和。")
     @NotBlank(message = "题目描述不能为空")
     private String content;

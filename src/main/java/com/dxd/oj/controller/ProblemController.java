@@ -9,6 +9,7 @@ import com.dxd.oj.model.dto.problem.ProblemUpdateRequest;
 import com.dxd.oj.model.vo.PageVO;
 import com.dxd.oj.model.vo.ProblemCaseVO;
 import com.dxd.oj.model.vo.ProblemCreateVO;
+import com.dxd.oj.model.vo.ProblemTagVO;
 import com.dxd.oj.model.vo.ProblemVO;
 import com.dxd.oj.service.ProblemService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -43,6 +44,12 @@ public class ProblemController {
         String token = extractToken(request);
         IPage<ProblemVO> pageResult = problemService.pageProblems(queryRequest, token);
         return ResultUtils.success(PageVO.of(pageResult));
+    }
+
+    @Operation(summary = "查询题目标签列表", description = "用于题库筛选和题目编辑页标签选择。")
+    @GetMapping("/tags")
+    public BaseResponse<List<ProblemTagVO>> listProblemTags() {
+        return ResultUtils.success(problemService.listProblemTags());
     }
 
     @Operation(summary = "查询题目详情", description = "学生仅可查看已发布题目详情；教师/管理员可查看全部。")
