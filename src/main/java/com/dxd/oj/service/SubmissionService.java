@@ -25,6 +25,8 @@ public interface SubmissionService {
 
     boolean rejudgeSubmission(Long submissionId, String token);
 
+    void processSubmissionTask(Long submissionId, String token);
+
     JudgeOverviewVO getJudgeOverview();
 
     List<JudgeDailyStatsVO> getJudgeDailyStats(Integer days);

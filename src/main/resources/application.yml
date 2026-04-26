@@ -72,6 +72,11 @@ logging:
     com.baomidou.mybatisplus: warn
 
 oj:
+  judge:
+    mq:
+      exchange: ${OJ_JUDGE_MQ_EXCHANGE:oj.judge.exchange}
+      queue: ${OJ_JUDGE_MQ_QUEUE:oj.judge.queue}
+      routing-key: ${OJ_JUDGE_MQ_ROUTING_KEY:oj.judge.submit}
   auth:
     jwt:
       secret: ${OJ_JWT_SECRET:OnlineJudgeJwtSecretKeyChangeMe_2026_03_30}

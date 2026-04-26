@@ -13,6 +13,7 @@ import com.dxd.oj.mapper.ProblemMapper;
 import com.dxd.oj.mapper.SubmissionCaseMapper;
 import com.dxd.oj.mapper.SubmissionMapper;
 import com.dxd.oj.mapper.SysUserMapper;
+import com.dxd.oj.model.dto.judge.JudgeTaskMessage;
 import com.dxd.oj.model.dto.run.RunCodeRequest;
 import com.dxd.oj.model.dto.submission.SubmissionCreateRequest;
 import com.dxd.oj.model.dto.submission.SubmissionPageQueryRequest;
@@ -39,6 +40,8 @@ import com.dxd.oj.service.RunService;
 import com.dxd.oj.service.SubmissionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -100,12 +103,19 @@ public class SubmissionServiceImpl implements SubmissionService {
     private final ContestRankService contestRankService;
     private final RunService runService;
     private final JdbcTemplate jdbcTemplate;
+    private final RabbitTemplate rabbitTemplate;
 
     private static final int MAX_SOURCE_CODE_LENGTH = 200000;
     private static final int DEFAULT_DAILY_STATS_DAYS = 7;
     private static final int MIN_DAILY_STATS_DAYS = 1;
     private static final int MAX_DAILY_STATS_DAYS = 30;
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    @Value("${oj.judge.mq.exchange:oj.judge.exchange}")
+    private String judgeExchangeName;
+
+    @Value("${oj.judge.mq.routing-key:oj.judge.submit}")
+    private String judgeRoutingKey;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -140,17 +150,11 @@ public class SubmissionServiceImpl implements SubmissionService {
         }
         increaseProblemSubmitCount(problem.getId());
 
-        JudgeSummary summary = doJudge(submission, problem, cases, token);
-        if (STATUS_ACCEPTED.equals(summary.finalStatus())) {
-            increaseProblemAcceptCount(problem.getId());
-        }
-        if (submission.getContestId() != null && submission.getContestId() > 0) {
-            contestRankService.refreshUserRank(submission.getContestId(), submission.getUserId());
-        }
+        dispatchJudgeTask(submission, token);
 
         SubmissionCreateVO response = new SubmissionCreateVO();
         response.setSubmissionId(submission.getId());
-        response.setStatus(summary.finalStatus());
+        response.setStatus(STATUS_WAITING);
         return response;
     }
 
@@ -266,6 +270,40 @@ public class SubmissionServiceImpl implements SubmissionService {
             contestRankService.refreshUserRank(submission.getContestId(), submission.getUserId());
         }
         return true;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void processSubmissionTask(Long submissionId, String token) {
+        if (submissionId == null || submissionId <= 0) {
+            return;
+        }
+        Submission submission = submissionMapper.selectById(submissionId);
+        if (submission == null) {
+            return;
+        }
+        if (!STATUS_WAITING.equalsIgnoreCase(submission.getStatus())
+                && !STATUS_JUDGING.equalsIgnoreCase(submission.getStatus())) {
+            return;
+        }
+        Problem problem = problemMapper.selectById(submission.getProblemId());
+        if (problem == null) {
+            markSubmissionSystemError(submission, "题目不存在，无法判题");
+            return;
+        }
+        List<ProblemCase> cases = listProblemCases(problem.getId());
+        if (CollectionUtils.isEmpty(cases)) {
+            markSubmissionSystemError(submission, "题目未配置测试用例，无法判题");
+            return;
+        }
+
+        JudgeSummary summary = doJudge(submission, problem, cases, token);
+        if (STATUS_ACCEPTED.equals(summary.finalStatus())) {
+            increaseProblemAcceptCount(problem.getId());
+        }
+        if (submission.getContestId() != null && submission.getContestId() > 0) {
+            contestRankService.refreshUserRank(submission.getContestId(), submission.getUserId());
+        }
     }
 
     @Override
@@ -833,6 +871,30 @@ public class SubmissionServiceImpl implements SubmissionService {
         } catch (Exception e) {
             return 0L;
         }
+    }
+
+    private void dispatchJudgeTask(Submission submission, String token) {
+        JudgeTaskMessage message = new JudgeTaskMessage();
+        message.setSubmissionId(submission.getId());
+        message.setUserId(submission.getUserId());
+        message.setToken(token);
+        message.setCreatedAt(LocalDateTime.now());
+        try {
+            rabbitTemplate.convertAndSend(judgeExchangeName, judgeRoutingKey, message);
+        } catch (Exception e) {
+            log.error("判题任务投递MQ失败，降级同步判题：submissionId={}", submission.getId(), e);
+            processSubmissionTask(submission.getId(), token);
+        }
+    }
+
+    private void markSubmissionSystemError(Submission submission, String message) {
+        if (submission == null) {
+            return;
+        }
+        submission.setStatus(STATUS_SYSTEM_ERROR);
+        submission.setErrorMessage(truncateText(message, 500));
+        submission.setJudgeTime(LocalDateTime.now());
+        submissionMapper.updateById(submission);
     }
 
     private int normalizeDailyStatsDays(Integer days) {
