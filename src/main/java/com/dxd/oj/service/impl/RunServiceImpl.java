@@ -22,6 +22,8 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -64,6 +66,18 @@ public class RunServiceImpl implements RunService {
     @Value("${oj.run.python-cmd:python3.14}")
     private String pythonCmd;
 
+    @Value("${oj.run.container.enabled:true}")
+    private boolean containerEnabled;
+
+    @Value("${oj.run.container.image:oj-judge-runner:latest}")
+    private String runnerImage;
+
+    @Value("${oj.run.container.workspace:/workspace}")
+    private String containerWorkspace;
+
+    @Value("${oj.run.container.cpus:1.0}")
+    private String containerCpus;
+
     @Override
     public RunCodeResponse runCode(RunCodeRequest request, String token) {
         return runCodeInternal(request, token, null);
@@ -104,7 +118,14 @@ public class RunServiceImpl implements RunService {
 
             if (requiresCompile(language)) {
                 emitStatus(callback, "编译中...");
-                RunCodeResponse compileResult = runProcess(buildCompileCommand(language), workDir, null, timeLimit, callback);
+                RunCodeResponse compileResult = runProcess(
+                        buildCompileCommand(language),
+                        workDir,
+                        null,
+                        timeLimit,
+                        memoryLimitMb,
+                        callback
+                );
                 compileTimeMs = safeMs(compileResult.getTimeUsedMs());
                 if (!STATUS_SUCCESS.equals(compileResult.getStatus())) {
                     compileResult.setStatus(STATUS_COMPILE_ERROR);
@@ -123,6 +144,7 @@ public class RunServiceImpl implements RunService {
                     workDir,
                     request.getInputData(),
                     timeLimit,
+                    memoryLimitMb,
                     callback
             );
             long executeTimeMs = safeMs(runResult.getTimeUsedMs());
@@ -239,7 +261,14 @@ public class RunServiceImpl implements RunService {
         };
     }
 
-    private RunCodeResponse runProcess(String[] command, Path workDir, String inputData, int timeoutMs, RunStreamCallback callback) {
+    private RunCodeResponse runProcess(
+            String[] command,
+            Path workDir,
+            String inputData,
+            int timeoutMs,
+            int memoryLimitMb,
+            RunStreamCallback callback
+    ) {
         if (command == null || command.length == 0) {
             RunCodeResponse response = new RunCodeResponse();
             response.setStatus(STATUS_UNSUPPORTED);
@@ -254,12 +283,12 @@ public class RunServiceImpl implements RunService {
         long start = System.nanoTime();
         Process process;
         try {
-            process = new ProcessBuilder(command)
+            process = new ProcessBuilder(buildProcessCommand(command, workDir, memoryLimitMb))
                     .directory(workDir.toFile())
                     .redirectErrorStream(false)
                     .start();
         } catch (IOException e) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "启动运行进程失败，请检查本机编译器环境");
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "启动运行进程失败，请检查Docker或运行环境配置");
         }
 
         OutputCollector stdoutCollector = new OutputCollector(maxOutputLength);
@@ -322,6 +351,41 @@ public class RunServiceImpl implements RunService {
         response.setStderr(stderr);
         response.setStatus(exitCode == 0 ? STATUS_SUCCESS : STATUS_RUNTIME_ERROR);
         return response;
+    }
+
+    private String[] buildProcessCommand(String[] command, Path workDir, int memoryLimitMb) {
+        if (command == null || command.length == 0) {
+            return new String[0];
+        }
+        if (!containerEnabled) {
+            return command;
+        }
+        return buildDockerCommand(command, workDir, memoryLimitMb);
+    }
+
+    private String[] buildDockerCommand(String[] command, Path workDir, int memoryLimitMb) {
+        int safeMemoryMb = Math.max(MIN_MEMORY_LIMIT_MB, Math.min(memoryLimitMb, MAX_MEMORY_LIMIT_MB));
+        List<String> dockerCommand = new ArrayList<>();
+        dockerCommand.add("docker");
+        dockerCommand.add("run");
+        dockerCommand.add("--rm");
+        dockerCommand.add("--network");
+        dockerCommand.add("none");
+        dockerCommand.add("--cpus");
+        dockerCommand.add(StringUtils.hasText(containerCpus) ? containerCpus : "1.0");
+        dockerCommand.add("--memory");
+        dockerCommand.add(safeMemoryMb + "m");
+        dockerCommand.add("--memory-swap");
+        dockerCommand.add(safeMemoryMb + "m");
+        dockerCommand.add("-v");
+        dockerCommand.add(workDir.toAbsolutePath() + ":" + containerWorkspace);
+        dockerCommand.add("-w");
+        dockerCommand.add(containerWorkspace);
+        dockerCommand.add(runnerImage);
+        for (String item : command) {
+            dockerCommand.add(item);
+        }
+        return dockerCommand.toArray(new String[0]);
     }
 
     private long safeMs(Long value) {

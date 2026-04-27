@@ -77,6 +77,12 @@ oj:
       exchange: ${OJ_JUDGE_MQ_EXCHANGE:oj.judge.exchange}
       queue: ${OJ_JUDGE_MQ_QUEUE:oj.judge.queue}
       routing-key: ${OJ_JUDGE_MQ_ROUTING_KEY:oj.judge.submit}
+    node:
+      heartbeat-enabled: ${OJ_JUDGE_NODE_HEARTBEAT_ENABLED:true}
+      heartbeat-interval-ms: ${OJ_JUDGE_NODE_HEARTBEAT_INTERVAL_MS:5000}
+      host: ${OJ_JUDGE_NODE_HOST:}
+      version: ${OJ_JUDGE_NODE_VERSION:}
+      remark: ${OJ_JUDGE_NODE_REMARK:}
   auth:
     jwt:
       secret: ${OJ_JWT_SECRET:OnlineJudgeJwtSecretKeyChangeMe_2026_03_30}
@@ -98,3 +104,8 @@ oj:
     max-time-limit-ms: ${OJ_RUN_MAX_TIME_LIMIT_MS:30000}
     max-output-length: ${OJ_RUN_MAX_OUTPUT_LENGTH:65536}
     python-cmd: ${OJ_RUN_PYTHON_CMD:python3.14}
+    container:
+      enabled: ${OJ_RUN_CONTAINER_ENABLED:true}
+      image: ${OJ_RUN_CONTAINER_IMAGE:oj-judge-runner:latest}
+      workspace: ${OJ_RUN_CONTAINER_WORKSPACE:/workspace}
+      cpus: ${OJ_RUN_CONTAINER_CPUS:1.0}
