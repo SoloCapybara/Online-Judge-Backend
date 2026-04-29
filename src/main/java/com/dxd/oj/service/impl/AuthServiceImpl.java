@@ -6,14 +6,18 @@ import com.dxd.oj.common.JwtUtils;
 import com.dxd.oj.exception.BusinessException;
 import com.dxd.oj.mapper.LoginLogMapper;
 import com.dxd.oj.mapper.SysConfigMapper;
+import com.dxd.oj.mapper.SysPermissionMapper;
 import com.dxd.oj.mapper.SysRoleMapper;
+import com.dxd.oj.mapper.SysRolePermissionMapper;
 import com.dxd.oj.mapper.SysUserMapper;
 import com.dxd.oj.mapper.SysUserRoleMapper;
 import com.dxd.oj.model.dto.auth.UserLoginRequest;
 import com.dxd.oj.model.dto.auth.UserRegisterRequest;
 import com.dxd.oj.model.entity.LoginLog;
 import com.dxd.oj.model.entity.SysRole;
+import com.dxd.oj.model.entity.SysPermission;
 import com.dxd.oj.model.entity.SysConfig;
+import com.dxd.oj.model.entity.SysRolePermission;
 import com.dxd.oj.model.entity.SysUser;
 import com.dxd.oj.model.entity.SysUserRole;
 import com.dxd.oj.model.vo.LoginUserVO;
@@ -52,6 +56,8 @@ public class AuthServiceImpl implements AuthService {
     private final SysConfigMapper sysConfigMapper;
     private final SysRoleMapper sysRoleMapper;
     private final SysUserRoleMapper sysUserRoleMapper;
+    private final SysRolePermissionMapper sysRolePermissionMapper;
+    private final SysPermissionMapper sysPermissionMapper;
     private final LoginLogMapper loginLogMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
@@ -272,6 +278,7 @@ public class AuthServiceImpl implements AuthService {
         loginUserVO.setAvatar(user.getAvatar());
         loginUserVO.setStatus(user.getStatus());
         loginUserVO.setRoles(getRoleCodesByUserId(user.getId()));
+        loginUserVO.setPermissionCodes(getPermissionCodesByUserId(user.getId()));
         return loginUserVO;
     }
 
@@ -287,6 +294,48 @@ public class AuthServiceImpl implements AuthService {
             return Collections.emptyList();
         }
         return roleList.stream().map(SysRole::getRoleCode).collect(Collectors.toList());
+    }
+
+    private List<String> getPermissionCodesByUserId(Long userId) {
+        List<SysUserRole> userRoleList = sysUserRoleMapper.selectList(new LambdaQueryWrapper<SysUserRole>()
+                .eq(SysUserRole::getUserId, userId));
+        if (CollectionUtils.isEmpty(userRoleList)) {
+            return Collections.emptyList();
+        }
+        List<Long> roleIds = userRoleList.stream()
+                .map(SysUserRole::getRoleId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (CollectionUtils.isEmpty(roleIds)) {
+            return Collections.emptyList();
+        }
+
+        List<SysRolePermission> rolePermissions = sysRolePermissionMapper.selectList(new LambdaQueryWrapper<SysRolePermission>()
+                .in(SysRolePermission::getRoleId, roleIds));
+        if (CollectionUtils.isEmpty(rolePermissions)) {
+            return Collections.emptyList();
+        }
+
+        List<Long> permissionIds = rolePermissions.stream()
+                .map(SysRolePermission::getPermissionId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (CollectionUtils.isEmpty(permissionIds)) {
+            return Collections.emptyList();
+        }
+
+        List<SysPermission> permissions = sysPermissionMapper.selectBatchIds(permissionIds);
+        if (CollectionUtils.isEmpty(permissions)) {
+            return Collections.emptyList();
+        }
+        return permissions.stream()
+                .filter(permission -> Objects.equals(permission.getStatus(), 1))
+                .map(SysPermission::getPermissionCode)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList();
     }
 
     private void saveLoginLog(Long userId, String username, Integer loginStatus, String ip, String userAgent, String failReason) {

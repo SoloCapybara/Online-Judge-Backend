@@ -360,3 +360,71 @@ VALUES (1, 'STUDENT', '学生', '学生角色'),
        (3, 'ADMIN', '管理员', '管理员角色')
 ON DUPLICATE KEY UPDATE `role_name` = VALUES(`role_name`),
                         `description` = VALUES(`description`);
+
+-- 基础权限点初始化（菜单 + API）
+INSERT INTO `sys_permission`
+(`id`, `permission_code`, `permission_name`, `permission_type`, `path`, `method`, `parent_id`, `sort_no`, `status`,
+ `description`)
+VALUES
+-- 菜单权限（MENU）
+(1001, 'MENU_HOME', '首页', 'MENU', '/', NULL, NULL, 10, 1, '首页菜单'),
+(1002, 'MENU_PROBLEMS', '题库', 'MENU', '/problems', NULL, NULL, 20, 1, '题库菜单'),
+(1003, 'MENU_CONTESTS', '比赛/作业', 'MENU', '/contests', NULL, NULL, 30, 1, '比赛与作业菜单'),
+(1004, 'MENU_SUBMISSIONS', '提交记录', 'MENU', '/submissions', NULL, NULL, 40, 1, '提交记录菜单'),
+(1005, 'MENU_RANK', '排行榜', 'MENU', '/rank', NULL, NULL, 50, 1, '排行榜菜单'),
+(1006, 'MENU_HELP', '帮助', 'MENU', '/help', NULL, NULL, 60, 1, '帮助菜单'),
+(1007, 'MENU_USER_CENTER', '用户中心', 'MENU', '/user-center', NULL, NULL, 70, 1, '用户中心菜单'),
+(1008, 'MENU_TEACHER', '教师工作台', 'MENU', '/teacher', NULL, NULL, 80, 1, '教师工作台菜单'),
+(1009, 'MENU_ADMIN', '管理台', 'MENU', '/admin', NULL, NULL, 90, 1, '管理员工作台菜单'),
+(1010, 'MENU_PROBLEM_CREATE', '创建题目页', 'MENU', '/problems/create', NULL, NULL, 100, 1, '创建题目页面'),
+(1011, 'MENU_PROBLEM_EDIT', '编辑题目页', 'MENU', '/problems/:id/edit', NULL, NULL, 110, 1, '编辑题目页面'),
+
+-- API 权限（API）
+(2001, 'API_AUTH_REGISTER', '用户注册', 'API', '/api/auth/register', 'POST', NULL, 200, 1, '注册接口'),
+(2002, 'API_AUTH_LOGIN', '用户登录', 'API', '/api/auth/login', 'POST', NULL, 210, 1, '登录接口'),
+(2003, 'API_AUTH_ME', '当前登录用户', 'API', '/api/auth/get/login', 'GET', NULL, 220, 1, '当前登录用户接口'),
+(2010, 'API_PROBLEM_READ', '题目查询', 'API', '/api/problem/**', 'GET', NULL, 300, 1, '题目相关查询接口'),
+(2011, 'API_PROBLEM_WRITE', '题目写操作', 'API', '/api/problem/**', 'POST|PUT|DELETE', NULL, 310, 1, '题目创建编辑删除'),
+(2020, 'API_CONTEST_READ', '比赛查询', 'API', '/api/contest/**', 'GET', NULL, 400, 1, '比赛与榜单查询'),
+(2021, 'API_CONTEST_WRITE', '比赛管理', 'API', '/api/contest/**', 'POST|PUT|DELETE', NULL, 410, 1, '创建发布绑定删除比赛'),
+(2030, 'API_SUBMISSION_READ', '提交查询', 'API', '/api/submission/**', 'GET', NULL, 500, 1, '提交查询接口'),
+(2031, 'API_SUBMISSION_WRITE', '提交创建与重判', 'API', '/api/submission/**', 'POST', NULL, 510, 1, '提交代码与重判'),
+(2040, 'API_PROFILE', '个人中心接口', 'API', '/api/user/profile/**', 'GET|POST|PUT', NULL, 600, 1, '个人信息与统计'),
+(2050, 'API_ADMIN_USERS', '管理员用户管理', 'API', '/api/admin/users/**', 'GET|PUT', NULL, 700, 1, '管理员用户管理接口'),
+(2051, 'API_ADMIN_CONFIG', '管理员系统配置', 'API', '/api/admin/config/**', 'GET|PUT', NULL, 710, 1, '管理员系统配置接口'),
+(2052, 'API_JUDGE_MONITOR', '判题监控接口', 'API', '/api/judge/**', 'GET', NULL, 720, 1, '判题服务监控接口')
+ON DUPLICATE KEY UPDATE
+    `permission_name` = VALUES(`permission_name`),
+    `permission_type` = VALUES(`permission_type`),
+    `path` = VALUES(`path`),
+    `method` = VALUES(`method`),
+    `parent_id` = VALUES(`parent_id`),
+    `sort_no` = VALUES(`sort_no`),
+    `status` = VALUES(`status`),
+    `description` = VALUES(`description`);
+
+-- 角色-权限点授权初始化
+INSERT INTO `sys_role_permission` (`id`, `role_id`, `permission_id`)
+VALUES
+-- STUDENT（学生）
+(300001, 1, 1001), (300002, 1, 1002), (300003, 1, 1003), (300004, 1, 1004), (300005, 1, 1005),
+(300006, 1, 1006), (300007, 1, 1007),
+(300008, 1, 2001), (300009, 1, 2002), (300010, 1, 2003), (300011, 1, 2010), (300012, 1, 2020),
+(300013, 1, 2030), (300014, 1, 2031), (300015, 1, 2040),
+
+-- TEACHER（教师）
+(300101, 2, 1001), (300102, 2, 1002), (300103, 2, 1003), (300104, 2, 1004), (300105, 2, 1005),
+(300106, 2, 1006), (300107, 2, 1007), (300108, 2, 1008), (300109, 2, 1010), (300110, 2, 1011),
+(300111, 2, 2001), (300112, 2, 2002), (300113, 2, 2003), (300114, 2, 2010), (300115, 2, 2011),
+(300116, 2, 2020), (300117, 2, 2021), (300118, 2, 2030), (300119, 2, 2031), (300120, 2, 2040),
+(300121, 2, 2052),
+
+-- ADMIN（管理员）
+(300201, 3, 1001), (300202, 3, 1002), (300203, 3, 1003), (300204, 3, 1004), (300205, 3, 1005),
+(300206, 3, 1006), (300207, 3, 1007), (300208, 3, 1008), (300209, 3, 1009), (300210, 3, 1010),
+(300211, 3, 1011),
+(300212, 3, 2001), (300213, 3, 2002), (300214, 3, 2003), (300215, 3, 2010), (300216, 3, 2011),
+(300217, 3, 2020), (300218, 3, 2021), (300219, 3, 2030), (300220, 3, 2031), (300221, 3, 2040),
+(300222, 3, 2050), (300223, 3, 2051), (300224, 3, 2052)
+ON DUPLICATE KEY UPDATE `role_id` = VALUES(`role_id`),
+                        `permission_id` = VALUES(`permission_id`);

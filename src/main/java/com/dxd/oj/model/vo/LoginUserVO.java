@@ -27,4 +27,7 @@ public class LoginUserVO implements Serializable {
 
     @Schema(description = "角色编码列表，例如 [ADMIN] / [TEACHER] / [STUDENT]")
     private List<String> roles;
+
+    @Schema(description = "权限编码列表，例如 [MENU_HOME, API_PROBLEM_READ]")
+    private List<String> permissionCodes;
 }
